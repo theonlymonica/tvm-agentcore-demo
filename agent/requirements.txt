@@ -28,7 +28,7 @@ fastapi==0.141.1
 uvicorn[standard]==0.52.1
 pydantic==2.13.4
 # MCP SDK — Model Context Protocol client
-mcp==1.29.0
+mcp==2.0.0
 # mcp-proxy-for-aws — SigV4-authenticated MCP client for AgentCore Gateway.
 # Note the span this pin closes: the previous `>=0.1.0` floor resolved to
 # 1.6.4, i.e. the declared constraint permitted anything across a 1.x major
