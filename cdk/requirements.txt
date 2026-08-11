@@ -1,0 +1,16 @@
+# CDK app dependencies.
+#
+# Pinned to exact versions (==), not lower bounds: `cdk synth` / `cdk deploy`
+# and the synth tests all resolve through this file, so a floating constraint
+# meant the synthesized template could change without a commit. aws-cdk-lib and
+# the AgentCore alpha construct library must move together — the alpha package
+# tracks the same release train (2.263.0 / 2.263.0a0), and mixing versions is
+# a known source of construct/jsii mismatch errors.
+#
+# Direct dependencies only; transitive versions still float. To bump, let the
+# `pip` Dependabot target for /cdk open the PR, or re-resolve with
+# `uv pip compile cdk/requirements.txt --python-version 3.14` and re-run the
+# synth tests.
+aws-cdk-lib==2.263.0
+aws-cdk.aws-bedrock-agentcore-alpha==2.263.0a0
+constructs==10.8.1

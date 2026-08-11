@@ -1,0 +1,93 @@
+version: 2
+
+# These seven update targets cover every manifest in the repository that
+# resolves a third-party artefact: the four Python requirement files, the pinned
+# action SHAs in .github/workflows/, and the two Dockerfiles.
+#
+# All of them are now pinned to exact versions or digests, which is what makes
+# these targets useful rather than decorative: Dependabot can only propose a
+# bump it can express in the manifest, so a ">=" constraint or a floating base
+# tag gives it nothing to write. Pinning moved drift from "silent, on every
+# rebuild" to "a reviewable PR, weekly".
+#
+# Remaining gap: only DIRECT dependencies are pinned. Transitive versions still
+# float on a cache-miss rebuild, because pinning those needs hash-locked
+# lockfiles and --require-hashes installs. That is a deliberate follow-up, not
+# an oversight.
+
+updates:
+  # --- Python -------------------------------------------------------------
+
+  # Test toolchain: requirements-dev.txt (pytest, hypothesis, moto, boto3, PyJWT).
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+
+  # CDK app: aws-cdk-lib, the AgentCore alpha construct library, constructs.
+  - package-ecosystem: pip
+    directory: "/cdk"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+
+  # Agent runtime: Strands SDK, FastAPI/uvicorn, pydantic, MCP client.
+  - package-ecosystem: pip
+    directory: "/agent"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+
+  # REQUEST interceptor Lambda: PyJWT[crypto] for JWKS signature verification.
+  # The Dockerfile installs from this manifest rather than an inline pip call
+  # precisely so this target can see the version.
+  - package-ecosystem: pip
+    directory: "/interceptor"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+
+  # --- GitHub Actions -----------------------------------------------------
+
+  # Keeps the SHA pins in .github/workflows/ current instead of stale.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(ci)
+
+  # --- Container images ---------------------------------------------------
+
+  - package-ecosystem: docker
+    directory: "/agent"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+
+  - package-ecosystem: docker
+    directory: "/interceptor"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)

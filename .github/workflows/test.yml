@@ -1,0 +1,70 @@
+name: Tests
+
+# The test suite is this repository's primary safety net for the isolation
+# model: the property tests pin the session-policy shape, fail-closed vending
+# and credential-scrubber behaviour. Nothing enforced that they pass before a
+# change landed, so a regression in the policy or the scrubber could be
+# committed silently. This workflow runs the whole suite on every push to main
+# and every pull request.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Read-only: the suite is fully offline (moto/stubs) and needs no AWS
+# credentials, no registry access and no write scope on the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: pytest (Python 3.14)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # conftest.py registers a "ci" Hypothesis profile (200 examples,
+      # deterministic, no deadline). The default "dev" profile runs 50.
+      HYPOTHESIS_PROFILE: ci
+
+    steps:
+      # Actions are pinned to a full commit SHA rather than a floating tag so a
+      # compromised or retagged release cannot silently change what runs here.
+      # The github-actions Dependabot ecosystem keeps these pins current.
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            cdk/requirements.txt
+
+      - name: Provide config.json
+        # config.json is deliberately gitignored (it is per-deployment local
+        # configuration). tests/test_synth_config_wiring.py synthesizes the real
+        # ToxicFlowStack, which calls shared.config_loader.load_config() and
+        # raises ConfigError when the file is absent — so a clean checkout needs
+        # the committed example placed at the repository root. It carries no
+        # credentials, only a region and a model id.
+        run: cp config.example.json config.json
+
+      - name: Install dependencies
+        # requirements-dev.txt is the test toolchain (pytest, hypothesis, moto,
+        # boto3, PyJWT). cdk/requirements.txt supplies aws-cdk-lib, which the
+        # synth/config tests import and which requirements-dev.txt does not
+        # declare.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt -r cdk/requirements.txt
+
+      - name: Run the test suite
+        run: python -m pytest

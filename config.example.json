@@ -1,0 +1,4 @@
+{
+  "aws_region": "us-east-1",
+  "bedrock_model_id": "us.anthropic.claude-sonnet-4-6"
+}
