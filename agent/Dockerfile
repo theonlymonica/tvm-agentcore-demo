@@ -23,7 +23,7 @@
 # declares a `docker` ecosystem for this directory, and a digest pin is what
 # makes that target useful — it can propose a reviewable bump, which a floating
 # tag gives it no way to express. Never drop this back to a bare tag.
-FROM --platform=linux/arm64 python:3.14-slim-bookworm@sha256:3299f3062a4f3da96c403bfeec3f042768c0bf8a72eee6dd5d90e3a1368ff334
+FROM --platform=linux/arm64 python:3.14-slim-bookworm@sha256:23c59390fc717bf09f9336908199a0ae75d9c4264bf296123f94ad772fea3b52
 
 WORKDIR /app
 
