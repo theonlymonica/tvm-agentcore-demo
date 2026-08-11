@@ -45,7 +45,7 @@ import synth_helpers as sh
 
 @pytest.fixture(scope="module")
 def full_stack() -> tuple[object, Template]:
-    """Synthesize the real ``ToxicFlowStack`` once for this module.
+    """Synthesize the real ``ScopedCredentialsStack`` once for this module.
 
     Returns:
         The ``(stack, Template)`` tuple from ``synth_helpers.build_full_stack``.

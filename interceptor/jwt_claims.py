@@ -29,7 +29,7 @@ JWT verification dependency (container-image Lambda):
     Signature verification pulls in ``cryptography`` (via ``PyJWT[crypto]``), which
     has native binaries. The interceptor is therefore packaged as a container-image
     Lambda built on the AWS Lambda Python base image (see ``interceptor/Dockerfile``
-    and ``cdk/toxic_flow_stack.py``), so the native dependency matches the runtime +
+    and ``cdk/scoped_credentials_stack.py``), so the native dependency matches the runtime +
     architecture. The JWKS URL and issuer are supplied via the ``COGNITO_JWKS_URL``
     / ``COGNITO_ISSUER`` environment variables; the JWKS is fetched once per
     execution environment and cached by ``PyJWKClient`` (not fetched on every call).
@@ -118,12 +118,12 @@ _REQUIRED_TOKEN_USE = "access"
 _CLIENT_ID_CLAIM = "client_id"
 
 #: Env var (comma-separated) listing the app client ids whose access tokens this
-#: interceptor accepts. Wired in ``cdk/toxic_flow_stack.py`` from the managed app
+#: interceptor accepts. Wired in ``cdk/scoped_credentials_stack.py`` from the managed app
 #: client. Unset/empty fails CLOSED — see ``_allowed_client_ids``.
 _ALLOWED_CLIENT_IDS_ENV = "COGNITO_ALLOWED_CLIENT_IDS"
 
 #: Cognito JWKS URL + issuer for signature verification, from the environment
-#: (set by ``cdk/toxic_flow_stack.py`` from ``cdk/auth_resources.py``). Empty
+#: (set by ``cdk/scoped_credentials_stack.py`` from ``cdk/auth_resources.py``). Empty
 #: when unset; verification then fails closed (returns None).
 _JWKS_URL = os.environ.get("COGNITO_JWKS_URL", "").strip()
 _ISSUER = os.environ.get("COGNITO_ISSUER", "").strip()

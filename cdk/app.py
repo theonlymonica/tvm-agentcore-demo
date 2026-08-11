@@ -20,14 +20,14 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
 from shared.config_loader import load_config
-from toxic_flow_stack import ToxicFlowStack
+from scoped_credentials_stack import ScopedCredentialsStack
 
 config = load_config()
 
 app = cdk.App()
-ToxicFlowStack(
+ScopedCredentialsStack(
     app,
-    "ToxicFlowStack",
+    "ScopedCredentialsStack",
     env=cdk.Environment(
         account=os.environ.get("CDK_DEFAULT_ACCOUNT"),
         region=config.aws_region,

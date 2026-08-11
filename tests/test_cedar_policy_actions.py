@@ -25,7 +25,7 @@ boundary itself is covered by ``tests/test_session_policy.py`` and
 ``tests/test_scope_tag_abac.py``.
 
 The fixture builds a minimal stack from the production factories with stub zip
-Lambdas (the real ``ToxicFlowStack`` would trigger two container builds that
+Lambdas (the real ``ScopedCredentialsStack`` would trigger two container builds that
 neither the policies nor the targets depend on), mirroring
 ``tests/test_synth_config.py`` — including its precedent of keeping the stub
 factory and minimal-stack fixture local, since ``tests/synth_helpers.py`` is

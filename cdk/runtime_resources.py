@@ -147,7 +147,7 @@ def create_runtime(
             service="CloudWatchLogs",
             action="PutResourcePolicy",
             parameters={
-                "policyName": "ToxicFlowXRayTransactionSearch",
+                "policyName": "ScopedCredentialsXRayTransactionSearch",
                 "policyDocument": logs_resource_policy_doc,
             },
             physical_resource_id=cr.PhysicalResourceId.of(
@@ -158,7 +158,7 @@ def create_runtime(
             service="CloudWatchLogs",
             action="DeleteResourcePolicy",
             parameters={
-                "policyName": "ToxicFlowXRayTransactionSearch",
+                "policyName": "ScopedCredentialsXRayTransactionSearch",
             },
         ),
         install_latest_aws_sdk=True,

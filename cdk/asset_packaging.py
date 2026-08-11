@@ -39,7 +39,7 @@ Container assets share this list
 --------------------------------
 ``ASSET_EXCLUDE`` is also passed to BOTH container assets — the agent runtime
 (``AgentRuntimeArtifact.from_asset``, ``cdk/runtime_resources.py``) and the REQUEST
-interceptor (``DockerImageCode.from_image_asset``, ``cdk/toxic_flow_stack.py``) —
+interceptor (``DockerImageCode.from_image_asset``, ``cdk/scoped_credentials_stack.py``) —
 which have the same exposure via their staged build contexts.
 
 ``interceptor/.dockerignore`` already excluded root-level caches, which is why that

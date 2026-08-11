@@ -4,8 +4,8 @@ Companion to ``tests/test_synth_config.py``. The two files exist because they
 need different stack fixtures. That file's assertions (DocumentsTable schema +
 published tool schemas) run against a MINIMAL stub stack, because neither the
 table nor the tool schemas depend on the Docker-image Lambdas. The assertions
-here need the REAL ``ToxicFlowStack`` instead — the RESPONSE interceptor's
-execution role, the frozen ``toxic-flow-*`` function names, and the per-Lambda
+here need the REAL ``ScopedCredentialsStack`` instead — the RESPONSE interceptor's
+execution role, the frozen ``scoped-credentials-*`` function names, and the per-Lambda
 runtimes only exist on the production stack — so they share a single
 module-scoped full-stack synth fixture.
 
@@ -19,8 +19,8 @@ What is asserted here:
   declaration points.
 * The RESPONSE interceptor's execution role holds no DynamoDB permission and no
   ``sts:AssumeRole``.
-* The stack is ``ToxicFlowStack`` and every explicitly named Lambda follows the
-  frozen ``toxic-flow-*`` prefix.
+* The stack is ``ScopedCredentialsStack`` and every explicitly named Lambda follows the
+  frozen ``scoped-credentials-*`` prefix.
 * Every Python Lambda uses ``python3.14``; the container-image REQUEST
   interceptor carries no ``Runtime`` and ``PackageType: Image``.
 
@@ -31,7 +31,7 @@ agreement is asserted separately, in
 Synthesis approach
 ------------------
 Full-stack: ``synth_helpers.build_full_stack`` instantiates the real
-``ToxicFlowStack`` (with a fixed account/region so no environment lookup is
+``ScopedCredentialsStack`` (with a fixed account/region so no environment lookup is
 needed) and returns ``(stack, Template.from_stack(stack))``. Synthesis is slower
 than the stub stack because the stack stages the container-image REQUEST
 interceptor and the agent Runtime image assets.
@@ -47,7 +47,7 @@ import synth_helpers as sh
 
 @pytest.fixture(scope="module")
 def full_stack() -> tuple[object, Template]:
-    """Synthesize the real ``ToxicFlowStack`` once; return ``(stack, template)``.
+    """Synthesize the real ``ScopedCredentialsStack`` once; return ``(stack, template)``.
 
     Returns:
         The ``(stack, Template)`` tuple from ``synth_helpers.build_full_stack``.
@@ -140,7 +140,7 @@ class TestResponseInterceptorRole:
         self, full_stack: tuple[object, Template]
     ) -> None:
         _, template = full_stack
-        _, fn = sh.function_by_name(template, "toxic-flow-response-interceptor")
+        _, fn = sh.function_by_name(template, "scoped-credentials-response-interceptor")
         role_logical_id = sh.function_role_logical_id(fn)
         actions = sh.iam_actions_targeting_role(template, role_logical_id)
 
@@ -160,7 +160,7 @@ class TestResponseInterceptorRole:
 
 
 class TestFrozenStackAndFunctionNames:
-    """Stack is ``ToxicFlowStack``; Lambda names follow ``toxic-flow-*``."""
+    """Stack is ``ScopedCredentialsStack``; Lambda names follow ``scoped-credentials-*``."""
 
     def test_stack_name_is_frozen(self, full_stack: tuple[object, Template]) -> None:
         stack, _ = full_stack

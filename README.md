@@ -102,7 +102,7 @@ aws cognito-idp admin-add-user-to-group --user-pool-id "$POOL_ID" \
     --username demo-user --group-name payments-core
 ```
 
-Then store that password as an SSM `SecureString` at `/toxic-flow/manual/DEMO_PASSWORD`,
+Then store that password as an SSM `SecureString` at `/scoped-credentials/manual/DEMO_PASSWORD`,
 which is where the token script reads it from.
 
 ## Run the demo

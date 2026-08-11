@@ -115,8 +115,8 @@ def enable_gateway_tracing(
     # (interceptor/scoped_credentials.py _SESSION_POLICY_TTL_SECONDS), NOT by
     # the 900s STS DurationSeconds — that is only the session floor.
     # -----------------------------------------------------------------------
-    source_name = "toxic-flow-gateway-traces-source"
-    dest_name = "toxic-flow-gateway-traces-dest"
+    source_name = "scoped-credentials-gateway-traces-source"
+    dest_name = "scoped-credentials-gateway-traces-dest"
 
     # The ARN of the ONE delivery source this stack may create or update.
     # PutDeliverySource takes the `delivery-source` resource type, so the grant

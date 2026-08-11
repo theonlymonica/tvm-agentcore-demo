@@ -62,10 +62,10 @@ import sys
 from typing import Any
 
 #: Stack whose outputs carry the managed pool / client ids.
-DEFAULT_STACK = "ToxicFlowStack"
+DEFAULT_STACK = "ScopedCredentialsStack"
 
 #: SSM SecureString holding the demo user's password.
-DEFAULT_PASSWORD_PARAM = "/toxic-flow/manual/DEMO_PASSWORD"
+DEFAULT_PASSWORD_PARAM = "/scoped-credentials/manual/DEMO_PASSWORD"
 
 #: The demo user created post-deploy (see cdk/auth_resources.py DEMO_USER_GROUP).
 DEFAULT_USERNAME = "demo-user"

@@ -10,7 +10,7 @@ scoped credentials it was handed.
 
 Why this module is duplicated from ``tools/common/scoped_credentials.py``:
     The interceptor Lambda is bundled from the ``interceptor/`` package ONLY
-    (``cdk/toxic_flow_stack.py`` excludes ``tools``, ``cdk``, ``shared`` from the
+    (``cdk/scoped_credentials_stack.py`` excludes ``tools``, ``cdk``, ``shared`` from the
     interceptor asset), so it cannot import ``common.scoped_credentials``. The
     ``build_session_policy`` shape and the READ/WRITE action sets are therefore
     re-declared here. They MUST stay byte-for-byte equivalent to the tool-side

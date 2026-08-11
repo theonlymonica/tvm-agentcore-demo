@@ -138,8 +138,8 @@ def _create_documents_table(scope: Construct) -> dynamodb.Table:
           DynamoDB reserved word, so any expression naming it must use a
           Key={...} map, a Key("scope") builder, or a #scope alias.
         - sort_key: doc_id (S) — the document identifier (e.g. PAY-001).
-        - table_name (physical): toxic-flow-documents — follows the
-          toxic-flow-* naming convention. (The CDK construct id / logical id
+        - table_name (physical): scoped-credentials-documents — follows the
+          scoped-credentials-* naming convention. (The CDK construct id / logical id
           remains "DocumentsTable".)
         - billing_mode: PAY_PER_REQUEST
         - removal_policy: DESTROY
@@ -184,7 +184,7 @@ def _create_documents_table(scope: Construct) -> dynamodb.Table:
     table = dynamodb.Table(
         scope,
         "DocumentsTable",
-        table_name="toxic-flow-documents",
+        table_name="scoped-credentials-documents",
         partition_key=dynamodb.Attribute(
             name="scope", type=dynamodb.AttributeType.STRING
         ),
@@ -235,7 +235,7 @@ def _create_seed_custom_resource(
     seed_fn = lambda_.Function(
         scope,
         "DocumentsSeedFunction",
-        function_name="toxic-flow-documents-seed",
+        function_name="scoped-credentials-documents-seed",
         runtime=lambda_.Runtime.PYTHON_3_14,
         handler="seed_handler.handler",
         code=python_lambda_code(seed_handler_dir),
@@ -244,7 +244,7 @@ def _create_seed_custom_resource(
         log_group=lambda_log_group(
             scope,
             "DocumentsSeedFunctionLogGroup",
-            function_name="toxic-flow-documents-seed",
+            function_name="scoped-credentials-documents-seed",
         ),
         environment={
             "DOCUMENTS_TABLE_NAME": documents_table.table_name,

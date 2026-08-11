@@ -5,7 +5,7 @@ Covers the two halves of the model-pinning fix:
 * unit — ``cdk/bedrock_model_access.py`` turns one configured model id into the
   correct least-privilege ARN set (inference profile + underlying foundation
   model conditioned on that profile), and refuses a wildcarded id; and
-* synth — the REAL ``ToxicFlowStack`` template grants ``bedrock:InvokeModel*``
+* synth — the REAL ``ScopedCredentialsStack`` template grants ``bedrock:InvokeModel*``
   on nothing but those pinned resources: no ``foundation-model/*`` and no
   ``inference-profile/*`` wildcard survives anywhere in the template.
 

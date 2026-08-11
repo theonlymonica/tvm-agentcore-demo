@@ -27,7 +27,7 @@ Managed rather than imported:
       tokens), NOT literals. Every consumer takes them from the
       :class:`AuthResources` returned by :func:`create_auth_resources` — see
       ``cdk/gateway_resources.py``, ``cdk/gateway_wiring.py`` and
-      ``cdk/toxic_flow_stack.py``. The ids are also published as stack outputs
+      ``cdk/scoped_credentials_stack.py``. The ids are also published as stack outputs
       (``CognitoUserPoolId``, ``CognitoAppClientId``, ``CognitoDiscoveryUrl``,
       ``CognitoIssuer``) so operators and probe scripts can resolve them with
       ``aws cloudformation describe-stacks`` instead of hardcoding them.
@@ -108,10 +108,10 @@ from constructs import Construct
 # ---------------------------------------------------------------------------
 
 #: Name of the managed user pool (the id is assigned by Cognito at deploy time).
-USER_POOL_NAME = "toxic-flow-pool"
+USER_POOL_NAME = "scoped-credentials-pool"
 
 #: Name of the managed app client (the id is assigned at deploy time).
-APP_CLIENT_NAME = "toxic-flow-client"
+APP_CLIENT_NAME = "scoped-credentials-client"
 
 #: Scope groups created in the pool. ONE Cognito group per scope, carried in the
 #: standard ``cognito:groups`` claim. This is the "known scope set" the

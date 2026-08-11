@@ -4,7 +4,7 @@ This module was extracted from ``tests/test_synth_config.py`` to keep that file
 under the 400-line limit. It holds two groups of helpers shared by the
 synth/config assertions:
 
-* ``build_full_stack`` — synthesizes the REAL ``ToxicFlowStack`` (the full
+* ``build_full_stack`` — synthesizes the REAL ``ScopedCredentialsStack`` (the full
   production stack, packaging the container-image REQUEST interceptor and the
   agent Runtime image) so the interceptor-wiring, frozen-name and
   all-Lambda-runtime assertions run against the exact template the deployed
@@ -25,7 +25,7 @@ synth/config assertions:
 
 Import-path note
 ----------------
-The ``cdk/`` modules import each other flat (``from toxic_flow_stack import
+The ``cdk/`` modules import each other flat (``from scoped_credentials_stack import
 ...``), so ``cdk/`` must be on ``sys.path``. This mirrors the setup already used
 by ``tests/test_synth_config.py`` and ``tests/test_seed.py``.
 """
@@ -51,16 +51,16 @@ import aws_cdk as cdk  # noqa: E402
 from aws_cdk.assertions import Template  # noqa: E402
 
 # The frozen stack name.
-FROZEN_STACK_NAME = "ToxicFlowStack"
+FROZEN_STACK_NAME = "ScopedCredentialsStack"
 
 # The frozen Lambda function-name prefix and the four function names pinned
 # explicitly.
-FROZEN_FUNCTION_PREFIX = "toxic-flow-"
+FROZEN_FUNCTION_PREFIX = "scoped-credentials-"
 REQUIRED_FUNCTION_NAMES = {
-    "toxic-flow-response-interceptor",
-    "toxic-flow-read-document",
-    "toxic-flow-search-documents",
-    "toxic-flow-reply",
+    "scoped-credentials-response-interceptor",
+    "scoped-credentials-read-document",
+    "scoped-credentials-search-documents",
+    "scoped-credentials-reply",
 }
 
 # The frozen Python runtime for every Python Lambda.
@@ -73,7 +73,7 @@ FROZEN_PYTHON_RUNTIME = "python3.14"
 
 
 def build_full_stack() -> tuple[cdk.Stack, Template]:
-    """Synthesize the real ``ToxicFlowStack`` and return ``(stack, template)``.
+    """Synthesize the real ``ScopedCredentialsStack`` and return ``(stack, template)``.
 
     Instantiates the production stack (not the minimal stub used by the
     data/tool-schema assertions) so the interceptor wiring, RESPONSE-interceptor
@@ -87,10 +87,10 @@ def build_full_stack() -> tuple[cdk.Stack, Template]:
         ``stack.stack_name`` (the stack name is cloud-assembly metadata, not part
         of the template body).
     """
-    from toxic_flow_stack import ToxicFlowStack
+    from scoped_credentials_stack import ScopedCredentialsStack
 
     app = cdk.App()
-    stack = ToxicFlowStack(
+    stack = ScopedCredentialsStack(
         app,
         FROZEN_STACK_NAME,
         env=cdk.Environment(account="123456789012", region="us-east-1"),

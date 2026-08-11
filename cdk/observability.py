@@ -76,7 +76,7 @@ def lambda_log_group(
         function_name: The Lambda function name whose conventional log-group
             path (``/aws/lambda/<function_name>``) this group takes. For a
             function with an auto-generated physical name, pass the stable
-            ``toxic-flow-*`` label the group should carry instead.
+            ``scoped-credentials-*`` label the group should carry instead.
 
     Returns:
         The ``logs.LogGroup`` to pass as the function's ``log_group=``.

@@ -69,7 +69,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 from shared.config_loader import load_config
 
 
-class ToxicFlowStack(cdk.Stack):
+class ScopedCredentialsStack(cdk.Stack):
     """Main CDK stack for the multi-tenant data isolation demo.
 
     Provisions the data layer (DocumentsTable, scoped roles, seed), the three
@@ -198,7 +198,7 @@ class ToxicFlowStack(cdk.Stack):
         self.read_document_fn = lambda_.Function(
             self,
             "ReadDocumentFunction",
-            function_name="toxic-flow-read-document",
+            function_name="scoped-credentials-read-document",
             runtime=lambda_.Runtime.PYTHON_3_14,
             handler="read_document.handler.handler",
             code=python_lambda_code(tools_dir),
@@ -209,7 +209,7 @@ class ToxicFlowStack(cdk.Stack):
             log_group=lambda_log_group(
                 self,
                 "ReadDocumentFunctionLogGroup",
-                function_name="toxic-flow-read-document",
+                function_name="scoped-credentials-read-document",
             ),
             reserved_concurrent_executions=TOOL_RESERVED_CONCURRENCY,
             environment={
@@ -221,7 +221,7 @@ class ToxicFlowStack(cdk.Stack):
         self.search_documents_fn = lambda_.Function(
             self,
             "SearchDocumentsFunction",
-            function_name="toxic-flow-search-documents",
+            function_name="scoped-credentials-search-documents",
             runtime=lambda_.Runtime.PYTHON_3_14,
             handler="search_documents.handler.handler",
             code=python_lambda_code(tools_dir),
@@ -229,7 +229,7 @@ class ToxicFlowStack(cdk.Stack):
             log_group=lambda_log_group(
                 self,
                 "SearchDocumentsFunctionLogGroup",
-                function_name="toxic-flow-search-documents",
+                function_name="scoped-credentials-search-documents",
             ),
             reserved_concurrent_executions=TOOL_RESERVED_CONCURRENCY,
             environment={
@@ -241,7 +241,7 @@ class ToxicFlowStack(cdk.Stack):
         self.reply_fn = lambda_.Function(
             self,
             "ReplyFunction",
-            function_name="toxic-flow-reply",
+            function_name="scoped-credentials-reply",
             runtime=lambda_.Runtime.PYTHON_3_14,
             handler="reply.handler.handler",
             code=python_lambda_code(tools_dir),
@@ -249,7 +249,7 @@ class ToxicFlowStack(cdk.Stack):
             log_group=lambda_log_group(
                 self,
                 "ReplyFunctionLogGroup",
-                function_name="toxic-flow-reply",
+                function_name="scoped-credentials-reply",
             ),
             reserved_concurrent_executions=TOOL_RESERVED_CONCURRENCY,
             environment={
@@ -333,7 +333,7 @@ class ToxicFlowStack(cdk.Stack):
             memory_size=256,
             # Bounded, stack-owned log group. `function_name`
             # is deliberately auto-generated here (see the PACKAGING NOTES
-            # above), so the group carries the stable `toxic-flow-session-guard`
+            # above), so the group carries the stable `scoped-credentials-session-guard`
             # label instead of the physical function name — an explicit
             # LoggingConfig group need not match /aws/lambda/<physical-name>.
             # No reserved concurrency: this interceptor is on EVERY gateway
@@ -342,7 +342,7 @@ class ToxicFlowStack(cdk.Stack):
             log_group=lambda_log_group(
                 self,
                 "SessionGuardFunctionLogGroup",
-                function_name="toxic-flow-session-guard",
+                function_name="scoped-credentials-session-guard",
             ),
             environment=interceptor_env,
         )
@@ -363,12 +363,12 @@ class ToxicFlowStack(cdk.Stack):
         # Logs only). It is deliberately NOT passed to wire_lambda_iam and receives
         # NO DynamoDB permission and NO sts:AssumeRole grant anywhere in the stack
         # — it never touches the data plane, it only rewrites the reply body in
-        # memory. `function_name` follows the frozen `toxic-flow-*` convention and
+        # memory. `function_name` follows the frozen `scoped-credentials-*` convention and
         # the runtime is PYTHON_3_14 like every other Lambda here.
         self.response_interceptor_fn = lambda_.Function(
             self,
             "ResponseInterceptorFunction",
-            function_name="toxic-flow-response-interceptor",
+            function_name="scoped-credentials-response-interceptor",
             runtime=lambda_.Runtime.PYTHON_3_14,
             handler="handler.handler",
             code=python_lambda_code(response_interceptor_dir),
@@ -379,6 +379,6 @@ class ToxicFlowStack(cdk.Stack):
             log_group=lambda_log_group(
                 self,
                 "ResponseInterceptorFunctionLogGroup",
-                function_name="toxic-flow-response-interceptor",
+                function_name="scoped-credentials-response-interceptor",
             ),
         )

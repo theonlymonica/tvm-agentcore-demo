@@ -147,7 +147,7 @@ def planted_bytecode() -> Iterator[list[Path]]:
 
 
 def _synthesize(outdir: Path) -> Path:
-    """Synthesize the real ``ToxicFlowStack`` into ``outdir``.
+    """Synthesize the real ``ScopedCredentialsStack`` into ``outdir``.
 
     Args:
         outdir: Cloud-assembly output directory. Assets are STAGED here (one
@@ -157,10 +157,10 @@ def _synthesize(outdir: Path) -> Path:
     Returns:
         The path to the cloud assembly directory.
     """
-    from toxic_flow_stack import ToxicFlowStack
+    from scoped_credentials_stack import ScopedCredentialsStack
 
     app = cdk.App(outdir=str(outdir))
-    ToxicFlowStack(
+    ScopedCredentialsStack(
         app,
         FROZEN_STACK_NAME,
         env=cdk.Environment(account="123456789012", region="us-east-1"),

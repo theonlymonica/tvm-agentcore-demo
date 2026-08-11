@@ -2,7 +2,7 @@
 
 This module pins five independent infrastructure concerns — none of them a live
 vulnerability, all of them unsafe as a reused pattern — against the SYNTHESIZED
-template of the real ``ToxicFlowStack``:
+template of the real ``ScopedCredentialsStack``:
 
 1. ``TestDocumentsTableDurability`` — point-in-time recovery and KMS encryption
    are on, and deletion protection stays OFF (it would deadlock teardown, which
@@ -45,16 +45,16 @@ EXPECTED_TOOL_RESERVED_CONCURRENCY = 10
 # and therefore the ones a runaway caller could use to exhaust account
 # concurrency.
 TOOL_FUNCTION_NAMES = (
-    "toxic-flow-read-document",
-    "toxic-flow-search-documents",
-    "toxic-flow-reply",
+    "scoped-credentials-read-document",
+    "scoped-credentials-search-documents",
+    "scoped-credentials-reply",
 )
 
 # Every first-party function that declares an explicit physical name.
 NAMED_FIRST_PARTY_FUNCTIONS = (
-    "toxic-flow-documents-seed",
+    "scoped-credentials-documents-seed",
     *TOOL_FUNCTION_NAMES,
-    "toxic-flow-response-interceptor",
+    "scoped-credentials-response-interceptor",
 )
 
 # The REQUEST interceptor's physical name is deliberately auto-generated (the
@@ -374,7 +374,7 @@ class TestToolReservedConcurrency:
         # decision, not an oversight.
         template, resources = synth
         _lid, response_fn = function_by_name(
-            template, "toxic-flow-response-interceptor"
+            template, "scoped-credentials-response-interceptor"
         )
         for label, function in (
             ("REQUEST interceptor", _session_guard(resources)),
@@ -400,7 +400,7 @@ class TestSeedGrantIsMinimal:
         self, synth: tuple[Template, dict[str, Any]]
     ) -> None:
         template, _resources = synth
-        _lid, seed_fn = function_by_name(template, "toxic-flow-documents-seed")
+        _lid, seed_fn = function_by_name(template, "scoped-credentials-documents-seed")
         role = function_role_logical_id(seed_fn)
         granted = {
             action
@@ -418,7 +418,7 @@ class TestSeedGrantIsMinimal:
         # The specific regression grant_write_data caused: a seeder that could
         # rewrite or destroy seeded documents rather than only (re)writing them.
         template, _resources = synth
-        _lid, seed_fn = function_by_name(template, "toxic-flow-documents-seed")
+        _lid, seed_fn = function_by_name(template, "scoped-credentials-documents-seed")
         role = function_role_logical_id(seed_fn)
         leaked = FORBIDDEN_SEED_ACTIONS.intersection(
             iam_actions_targeting_role(template, role)

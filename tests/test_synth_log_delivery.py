@@ -67,7 +67,7 @@ FORBIDDEN_LOG_TYPE = "APPLICATION_LOGS"
 
 #: The frozen delivery-source name created by ``enable_gateway_tracing``. The
 #: deploy-time IAM statement is pinned to exactly this name.
-TRACES_SOURCE_NAME = "toxic-flow-gateway-traces-source"
+TRACES_SOURCE_NAME = "scoped-credentials-gateway-traces-source"
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +250,7 @@ def _as_list(value: Any) -> list:
 
 @pytest.fixture(scope="module")
 def full_stack_template() -> Template:
-    """Synthesize the real ``ToxicFlowStack`` once and return its template.
+    """Synthesize the real ``ScopedCredentialsStack`` once and return its template.
 
     Returns:
         The ``Template`` for the production stack (the same synth path used by

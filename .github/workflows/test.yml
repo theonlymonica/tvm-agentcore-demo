@@ -51,7 +51,7 @@ jobs:
       - name: Provide config.json
         # config.json is deliberately gitignored (it is per-deployment local
         # configuration). tests/test_synth_config_wiring.py synthesizes the real
-        # ToxicFlowStack, which calls shared.config_loader.load_config() and
+        # ScopedCredentialsStack, which calls shared.config_loader.load_config() and
         # raises ConfigError when the file is absent — so a clean checkout needs
         # the committed example placed at the repository root. It carries no
         # credentials, only a region and a model id.

@@ -89,7 +89,7 @@ _READ_TOOLS = frozenset({"read_document", "search_documents"})
 _WRITE_TOOLS = frozenset({"reply"})
 
 #: Env vars naming the scoped roles + table ARN the interceptor assumes/scopes
-#: to. Wired in cdk/toxic_flow_stack.py.
+#: to. Wired in cdk/scoped_credentials_stack.py.
 _ENV_ACCESS_ROLE_ARN = "DOCUMENTS_ACCESS_ROLE_ARN"
 _ENV_WRITE_ROLE_ARN = "DOCUMENTS_WRITE_ROLE_ARN"
 _ENV_TABLE_ARN = "DOCUMENTS_TABLE_ARN"

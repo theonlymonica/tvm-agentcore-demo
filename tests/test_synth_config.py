@@ -19,7 +19,7 @@ gateway publishes to the agent.
 
 Synthesis approach (minimal stack)
 ----------------------------------
-The full ``ToxicFlowStack`` packages the REQUEST interceptor as a Docker *image*
+The full ``ScopedCredentialsStack`` packages the REQUEST interceptor as a Docker *image*
 Lambda and the agent as a Docker *image* Runtime; synthesizing it triggers two
 container builds. Neither Docker image influences the DocumentsTable schema or
 the published tool schemas — those come entirely from ``create_data_resources``
@@ -36,8 +36,8 @@ production code the deployed stack runs.
 Full-stack interceptor wiring
 -----------------------------
 The interceptor-wiring assertions (the RESPONSE interceptor's execution role,
-the frozen ``toxic-flow-*`` function names, the per-Lambda runtimes) need the
-REAL ``ToxicFlowStack``, because those resources do not exist on this file's
+the frozen ``scoped-credentials-*`` function names, the per-Lambda runtimes) need the
+REAL ``ScopedCredentialsStack``, because those resources do not exist on this file's
 stub stack. They live in the companion module
 ``tests/test_synth_config_wiring.py``, sharing the extracted helpers in
 ``tests/synth_helpers.py``. Run both files together (e.g. ``pytest
