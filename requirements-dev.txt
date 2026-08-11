@@ -35,7 +35,7 @@ moto[dynamodb,sts,iam]==5.2.2
 # boto3 / botocore — required by the tool handlers under test and for the
 # botocore Stubber used to simulate sts:AssumeRole success/failure.
 boto3==1.43.65
-botocore==1.43.65
+botocore==1.43.67
 
 # JWT signature verification in the interceptor. PyJWT[crypto] pulls
 # in `cryptography`; the interceptor jwt_claims module imports `jwt`, so the test
