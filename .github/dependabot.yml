@@ -4,11 +4,33 @@ version: 2
 # resolves a third-party artefact: the four Python requirement files, the pinned
 # action SHAs in .github/workflows/, and the two Dockerfiles.
 #
-# All of them are now pinned to exact versions or digests, which is what makes
-# these targets useful rather than decorative: Dependabot can only propose a
-# bump it can express in the manifest, so a ">=" constraint or a floating base
-# tag gives it nothing to write. Pinning moved drift from "silent, on every
-# rebuild" to "a reviewable PR, weekly".
+# All of them are pinned to exact versions or digests, which is what makes these
+# targets useful rather than decorative: Dependabot can only propose a bump it
+# can express in the manifest, so a ">=" constraint or a floating base tag gives
+# it nothing to write.
+#
+# SECURITY UPDATES ONLY — read this before raising the limit.
+#
+# Every target sets `open-pull-requests-limit: 0`, which disables routine
+# VERSION updates. Security updates are unaffected: they are not subject to this
+# limit and do not count toward it, so an advisory against a pinned dependency
+# still opens a pull request.
+#
+# The reason is that this is a reference implementation, not a maintained
+# product. Enabling version updates here produced ten pull requests within
+# minutes of the repository going public, none of which taught a reader anything
+# the pinned manifests do not already show. What matters for the supply-chain
+# point is that the versions ARE pinned and that a vulnerability still surfaces.
+#
+# If you fork this and want the pins kept current, either raise the limit or,
+# better, group the bumps so each ecosystem produces one pull request:
+#
+#     schedule:
+#       interval: monthly
+#     open-pull-requests-limit: 1
+#     groups:
+#       all:
+#         patterns: ["*"]
 #
 # Remaining gap: only DIRECT dependencies are pinned. Transitive versions still
 # float on a cache-miss rebuild, because pinning those needs hash-locked
@@ -22,9 +44,8 @@ updates:
   - package-ecosystem: pip
     directory: "/"
     schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
+      interval: monthly
+    open-pull-requests-limit: 0
     commit-message:
       prefix: chore(deps)
 
@@ -32,9 +53,8 @@ updates:
   - package-ecosystem: pip
     directory: "/cdk"
     schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
+      interval: monthly
+    open-pull-requests-limit: 0
     commit-message:
       prefix: chore(deps)
 
@@ -42,9 +62,8 @@ updates:
   - package-ecosystem: pip
     directory: "/agent"
     schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
+      interval: monthly
+    open-pull-requests-limit: 0
     commit-message:
       prefix: chore(deps)
 
@@ -54,9 +73,8 @@ updates:
   - package-ecosystem: pip
     directory: "/interceptor"
     schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
+      interval: monthly
+    open-pull-requests-limit: 0
     commit-message:
       prefix: chore(deps)
 
@@ -66,9 +84,8 @@ updates:
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
+      interval: monthly
+    open-pull-requests-limit: 0
     commit-message:
       prefix: chore(ci)
 
@@ -77,17 +94,15 @@ updates:
   - package-ecosystem: docker
     directory: "/agent"
     schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
+      interval: monthly
+    open-pull-requests-limit: 0
     commit-message:
       prefix: chore(deps)
 
   - package-ecosystem: docker
     directory: "/interceptor"
     schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
+      interval: monthly
+    open-pull-requests-limit: 0
     commit-message:
       prefix: chore(deps)
