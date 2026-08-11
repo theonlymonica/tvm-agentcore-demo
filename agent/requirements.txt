@@ -17,7 +17,7 @@
 # the agent still starts.
 
 # Strands Agents SDK — the agent framework
-strands-agents==1.50.2
+strands-agents==1.51.0
 # Strands Agents Tools — pre-built tool utilities
 strands-agents-tools==0.8.5
 # AWS SDK for Python — Bedrock model invocation, boto3 services
