@@ -1,0 +1,10 @@
+# Keep the container-image build context minimal and deterministic.
+# The Dockerfile does `COPY . ${LAMBDA_TASK_ROOT}/interceptor/`, so exclude
+# anything that is not interceptor Python source: the Dockerfile itself, this
+# ignore file, and Python bytecode caches (which would otherwise bloat the
+# image layer and perturb the asset hash across machines).
+__pycache__/
+*.pyc
+*.pyo
+Dockerfile
+.dockerignore

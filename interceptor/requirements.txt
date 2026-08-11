@@ -1,0 +1,18 @@
+# REQUEST interceptor Lambda dependencies (container image — see Dockerfile).
+#
+# This exists as a manifest rather than an inline `pip install` in the Dockerfile
+# for two reasons: the version is pinned where a reviewer expects to find it, and
+# Dependabot can actually see it. Neither of its ecosystems reads a version out
+# of a Dockerfile RUN line — `docker` bumps FROM only, `pip` reads manifests —
+# so a pin left inline would never be bumped.
+#
+# JWT signature verification (interceptor-hardening Item 2). PyJWT[crypto] pulls
+# in `cryptography` as a prebuilt abi3 wheel, which is why this image is built on
+# the AWS Lambda Python base rather than a slim Debian one. `cryptography` itself
+# is transitive and still floats — pinning transitives needs a hash-locked
+# lockfile and a --require-hashes install, deliberately out of scope here.
+#
+# Kept at the same version as the PyJWT pin in requirements-dev.txt: the test
+# venv imports interceptor/jwt_claims.py, so a divergence would mean the suite
+# verifies a different PyJWT than the deployed Lambda runs.
+PyJWT[crypto]==2.13.0

@@ -1,0 +1,37 @@
+# Agent dependencies for AgentCore Runtime deployment
+#
+# Pinned to exact versions (==), not lower bounds. This file is installed by
+# agent/Dockerfile at `cdk deploy` time, so a floating constraint meant two
+# deploys a week apart could ship a different dependency tree with no signal.
+# The versions below are the set the container was built and exercised with
+# (uvicorn serving GET /ping as the non-root user), resolved for
+# linux/aarch64 + CPython 3.14 — the platform the image actually targets.
+#
+# Direct dependencies only: transitive versions still float, because pinning
+# those needs a hash-locked lockfile and a --require-hashes install, which is
+# deliberately not part of this change.
+#
+# To bump: let the `pip` Dependabot target for /agent open the PR, or re-resolve
+# with `uv pip compile agent/requirements.txt --python-version 3.14
+# --python-platform aarch64-unknown-linux-gnu` and rebuild the image to confirm
+# the agent still starts.
+
+# Strands Agents SDK — the agent framework
+strands-agents==1.50.2
+# Strands Agents Tools — pre-built tool utilities
+strands-agents-tools==0.8.5
+# AWS SDK for Python — Bedrock model invocation, boto3 services
+boto3==1.43.65
+# FastAPI + Uvicorn — HTTP server for /invocations and /ping endpoints
+# (required by AgentCore Runtime service contract)
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
+pydantic==2.13.4
+# MCP SDK — Model Context Protocol client
+mcp==1.29.0
+# mcp-proxy-for-aws — SigV4-authenticated MCP client for AgentCore Gateway.
+# Note the span this pin closes: the previous `>=0.1.0` floor resolved to
+# 1.6.4, i.e. the declared constraint permitted anything across a 1.x major
+# release of a package that was pre-1.0 when the constraint was written.
+# Reference: https://github.com/awslabs/mcp-proxy-for-aws
+mcp-proxy-for-aws==1.6.4

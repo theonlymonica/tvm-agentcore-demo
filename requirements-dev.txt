@@ -1,0 +1,52 @@
+# Development / test dependencies.
+#
+# Target: Python 3.14 (the single Python version for this repository).
+#
+# Create a Python 3.14 virtual environment at the repository root:
+#
+#   python3.14 -m venv .venv
+#   source .venv/bin/activate
+#   pip install -r requirements-dev.txt
+#
+# Then run the suite from the repository root:
+#
+#   pytest
+
+# Every constraint below is an exact pin (==), not a lower bound: this file
+# drives both the local test venv and the CI job, so a floating constraint meant
+# a green run proved nothing about the next one. Direct dependencies only —
+# transitive versions still float, since pinning those needs a hash-locked
+# lockfile and a --require-hashes install, deliberately out of scope here.
+#
+# To bump: let the `pip` Dependabot target for / open the PR, or re-resolve with
+# `uv pip compile requirements-dev.txt --python-version 3.14` and run the suite.
+
+# Test runner
+pytest==9.1.1
+
+# Property-based testing (the property-marked tests that check the design's
+# correctness properties)
+hypothesis==6.165.2
+
+# AWS mocking for the IAM/STS/DynamoDB unit tests.
+# The [dynamodb,sts,iam] extra pulls in only the services this suite mocks.
+moto[dynamodb,sts,iam]==5.2.2
+
+# boto3 / botocore — required by the tool handlers under test and for the
+# botocore Stubber used to simulate sts:AssumeRole success/failure.
+boto3==1.43.65
+botocore==1.43.65
+
+# JWT signature verification in the interceptor. PyJWT[crypto] pulls
+# in `cryptography`; the interceptor jwt_claims module imports `jwt`, so the test
+# venv needs it to import the module. In production the interceptor ships as a
+# container image installing from interceptor/requirements.txt — keep this pin
+# and that one at the same version, or the suite verifies a different PyJWT than
+# the deployed Lambda runs.
+PyJWT[crypto]==2.13.0
+
+# SRP client for scripts/mint_demo_token.py. The managed Cognito app client
+# allows ALLOW_USER_SRP_AUTH only, and the AWS CLI cannot perform SRP (it does
+# not compute SRP_A), so there is no CLI path to a demo access token — this
+# library is that path. Dev/ops only: nothing deployed imports it.
+pycognito==2024.5.1
