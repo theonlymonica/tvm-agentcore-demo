@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 
 import interceptor.handler as interceptor_handler
+from interceptor.jwt_claims import VerifiedIdentity
 from interceptor.scoped_credentials import build_tenant_context
 from common.scoped_credentials import (
     ScopedCredentialsError,
@@ -35,6 +36,9 @@ from read_document.handler import handler as read_document_handler
 # canonical example from the AWS documentation so fixtures never contradict the
 # wire contract.
 _ACCESS_KEY_ID = "ASIAIOSFODNN7EXAMPLE"
+
+#: Cognito-shaped `sub` used as the verified subject in these stubs.
+_SUBJECT = "11111111-2222-3333-4444-555555555555"
 _SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 _SESSION_TOKEN = "IQoJb3JpZ2luX2VjEXAMPLETOKEN"
 
@@ -140,16 +144,18 @@ class TestInterceptorInjectsSingleContext:
 
     @pytest.fixture(autouse=True)
     def _stub_vend_and_scope(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Avoid real STS / JWT: derive a fixed scope and vend fixed credentials.
+        # Avoid real STS / JWT: derive a fixed identity and vend fixed credentials.
         monkeypatch.setattr(
             interceptor_handler,
-            "served_scope_from_authorization",
-            lambda _auth: "payments-core",
+            "verified_identity_from_authorization",
+            lambda _auth: VerifiedIdentity(
+                served_scope="payments-core", subject=_SUBJECT
+            ),
         )
         monkeypatch.setattr(
             interceptor_handler,
             "_vend_for_tool",
-            lambda _tool, _scope: _creds(),
+            lambda _tool, _scope, **_kwargs: _creds(),
         )
 
     @staticmethod
@@ -257,22 +263,24 @@ class TestInterceptorAuthorizationHeaderCaseInsensitive:
         monkeypatch.setattr(
             interceptor_handler,
             "_vend_for_tool",
-            lambda _tool, _scope: _creds(),
+            lambda _tool, _scope, **_kwargs: _creds(),
         )
 
-        # Faithful to jwt_claims.served_scope_from_authorization: a resolvable
-        # "Bearer <jwt>" value yields a scope; None/empty (what a missed header
+        # Faithful to jwt_claims.verified_identity_from_authorization: a resolvable
+        # "Bearer <jwt>" value yields an identity; None/empty (what a missed header
         # lookup produces) fails closed. This is what makes case-sensitivity of
         # the handler's header lookup observable in these tests.
-        def _scope_if_bearer(auth: Any) -> str | None:
+        def _identity_if_bearer(auth: Any) -> VerifiedIdentity | None:
             if isinstance(auth, str) and auth.strip().lower().startswith("bearer "):
-                return "payments-core"
+                return VerifiedIdentity(
+                    served_scope="payments-core", subject=_SUBJECT
+                )
             return None
 
         monkeypatch.setattr(
             interceptor_handler,
-            "served_scope_from_authorization",
-            _scope_if_bearer,
+            "verified_identity_from_authorization",
+            _identity_if_bearer,
         )
 
     @staticmethod

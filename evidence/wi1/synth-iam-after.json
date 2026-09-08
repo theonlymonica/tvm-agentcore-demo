@@ -1,0 +1,84 @@
+{
+  "identity_statements": [
+    {
+      "Action": [
+        "sts:TagSession",
+        "sts:SetSourceIdentity"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        {
+          "Fn::GetAtt": [
+            "DocumentsAccessRoleE3051761",
+            "Arn"
+          ]
+        },
+        {
+          "Fn::GetAtt": [
+            "DocumentsWriteRole59221FA3",
+            "Arn"
+          ]
+        }
+      ],
+      "Sid": "TagScopedDocumentsSessions"
+    }
+  ],
+  "trust_policies": {
+    "DocumentsAccessRole": {
+      "Statement": [
+        {
+          "Action": [
+            "sts:AssumeRole",
+            "sts:TagSession",
+            "sts:SetSourceIdentity"
+          ],
+          "Condition": {
+            "StringLike": {
+              "aws:RequestTag/scope": "*"
+            }
+          },
+          "Effect": "Allow",
+          "Principal": {
+            "AWS": [
+              {
+                "Fn::GetAtt": [
+                  "SessionGuardFunctionServiceRoleA5BDE0A4",
+                  "Arn"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "Version": "2012-10-17"
+    },
+    "DocumentsWriteRole": {
+      "Statement": [
+        {
+          "Action": [
+            "sts:AssumeRole",
+            "sts:TagSession",
+            "sts:SetSourceIdentity"
+          ],
+          "Condition": {
+            "StringLike": {
+              "aws:RequestTag/scope": "*"
+            }
+          },
+          "Effect": "Allow",
+          "Principal": {
+            "AWS": [
+              {
+                "Fn::GetAtt": [
+                  "SessionGuardFunctionServiceRoleA5BDE0A4",
+                  "Arn"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "Version": "2012-10-17"
+    }
+  }
+}

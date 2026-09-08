@@ -89,6 +89,24 @@ _ASSUME_ROLE_ACTION = "sts:AssumeRole"
 #: (https://docs.aws.amazon.com/IAM/latest/UserGuide/id_session-tags.html).
 _TAG_SESSION_ACTION = "sts:TagSession"
 
+#: IAM action for setting the SOURCE IDENTITY on that assume. Like
+#: ``sts:TagSession`` this is a SEPARATE action from ``sts:AssumeRole`` and must be
+#: allowed on BOTH sides: in the caller's identity policy (granted in
+#: ``wire_lambda_iam``) and in the target role's TRUST policy
+#: (``_trust_document``). AWS is explicit that the trust side is not optional:
+#: "Trust policies for all roles connected to an identity provider (IdP) must have
+#: the sts:SetSourceIdentity permission. For roles that don't have this permission
+#: in the role trust policy, the AssumeRole* operation will fail"
+#: (https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_control-access_monitor.html).
+#:
+#: What it buys: the vended session carries the Cognito ``sub`` of the human who
+#: signed in, so every DynamoDB action performed with the credentials is
+#: attributable in CloudTrail to a person rather than to a scope. Unlike
+#: ``RoleSessionName`` the value is immutable once set and persists across role
+#: chaining, which is what makes it usable as an audit anchor
+#: (https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html).
+_SET_SOURCE_IDENTITY_ACTION = "sts:SetSourceIdentity"
+
 #: Trust-policy condition requiring that a ``scope`` session tag be PRESENT on
 #: the assume request — the gate that makes the ABAC identity-policy condition in
 #: ``documents_roles.py`` unskippable. Without it a caller could assume the role
@@ -112,9 +130,9 @@ def _trust_document(exec_role_arns: list[str]) -> dict[str, Any]:
 
     Produces the intended trust-policy shape: a single ``Allow`` statement whose
     ``Principal.AWS`` lists the tool execution-role ARNs and whose ``Action`` is
-    ``sts:AssumeRole`` plus ``sts:TagSession``. Used to REPLACE (via L1 override)
-    the temporary ``AccountPrincipal`` placeholder trust so the shipped policy
-    names only the intended principals.
+    ``sts:AssumeRole`` plus ``sts:TagSession`` plus ``sts:SetSourceIdentity``. Used
+    to REPLACE (via L1 override) the temporary ``AccountPrincipal`` placeholder
+    trust so the shipped policy names only the intended principals.
 
     The statement is CONDITIONED on a ``scope`` session tag being present
     (``_REQUIRE_SCOPE_TAG_CONDITION``). Two consequences, both intended:
@@ -123,10 +141,14 @@ def _trust_document(exec_role_arns: list[str]) -> dict[str, Any]:
       trust boundary and no credential is minted at all. This is what stops the
       "future refactor / added caller / exception path skips policy construction"
       scenario from silently yielding table-wide cross-tenant access.
-    - Both actions live in ONE statement (the shape AWS publishes in its ABAC
-      tutorial) so the condition governs the ASSUME itself, not only the tagging.
-      A separate, unconditioned ``sts:AssumeRole`` statement would leave the
-      original hole wide open.
+    - All three actions live in ONE statement (the shape AWS publishes in its ABAC
+      tutorial) so the condition governs the ASSUME itself, not only the tagging or
+      the source-identity setting. A separate, unconditioned ``sts:AssumeRole``
+      statement would leave the original hole wide open.
+
+    ``sts:SetSourceIdentity`` is not hardening that can be deferred: AWS documents
+    that an ``AssumeRole`` passing ``SourceIdentity`` FAILS when the role's trust
+    policy omits the action, so the interceptor's vend depends on it being here.
 
     Args:
         exec_role_arns: The execution-role ARNs allowed to assume the scoped role.
@@ -141,7 +163,11 @@ def _trust_document(exec_role_arns: list[str]) -> dict[str, Any]:
             {
                 "Effect": "Allow",
                 "Principal": {"AWS": exec_role_arns},
-                "Action": [_ASSUME_ROLE_ACTION, _TAG_SESSION_ACTION],
+                "Action": [
+                    _ASSUME_ROLE_ACTION,
+                    _TAG_SESSION_ACTION,
+                    _SET_SOURCE_IDENTITY_ACTION,
+                ],
                 "Condition": _REQUIRE_SCOPE_TAG_CONDITION,
             }
         ],
@@ -211,17 +237,18 @@ def wire_lambda_iam(
     data.documents_access_role.grant_assume_role(interceptor_fn.grant_principal)
     data.documents_write_role.grant_assume_role(interceptor_fn.grant_principal)
 
-    # 1b. Identity side: sts:TagSession is a SEPARATE action from sts:AssumeRole
-    #     and grant_assume_role does NOT include it, so passing Tags on the assume
-    #     would fail AccessDenied without this statement. It is scoped to exactly
-    #     the two scoped-role ARNs — the interceptor cannot tag a session on any
-    #     other role. The trust side of the same requirement is in _trust_document
-    #     (both sides are mandatory).
+    # 1b. Identity side: sts:TagSession and sts:SetSourceIdentity are SEPARATE
+    #     actions from sts:AssumeRole and grant_assume_role does NOT include them,
+    #     so passing Tags or SourceIdentity on the assume would fail AccessDenied
+    #     without this statement. Both are scoped to exactly the two scoped-role
+    #     ARNs — the interceptor cannot tag a session, or set a source identity, on
+    #     any other role. The trust side of the same requirement is in
+    #     _trust_document (both sides are mandatory for each action).
     interceptor_fn.add_to_role_policy(
         iam.PolicyStatement(
             sid="TagScopedDocumentsSessions",
             effect=iam.Effect.ALLOW,
-            actions=[_TAG_SESSION_ACTION],
+            actions=[_TAG_SESSION_ACTION, _SET_SOURCE_IDENTITY_ACTION],
             resources=[
                 data.documents_access_role_arn,
                 data.documents_write_role_arn,

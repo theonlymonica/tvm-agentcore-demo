@@ -102,6 +102,11 @@ _TABLE_ARN = "arn:aws:dynamodb:us-east-1:123456789012:table/DocumentsTable"
 _ROLE_ARN = "arn:aws:iam::123456789012:role/DocumentsAccessRole"
 _SERVED_SCOPE = "payments-core"
 
+#: Identity parameters the vend now requires. Both come from OUTSIDE the request
+#: body: a Cognito-shaped `sub` (UUID) and a Gateway-supplied session id.
+_SUBJECT = "11111111-2222-3333-4444-555555555555"
+_GATEWAY_ID = "mcp-session-0001"
+
 #: The policy variable the identity policies must compare LeadingKeys against.
 _PRINCIPAL_TAG_VARIABLE = "${aws:PrincipalTag/scope}"
 #: The trust-policy condition key that must be required present.
@@ -109,6 +114,7 @@ _REQUEST_TAG_KEY = "aws:RequestTag/scope"
 
 _ASSUME_ACTION = "sts:AssumeRole"
 _TAG_SESSION_ACTION = "sts:TagSession"
+_SET_SOURCE_IDENTITY_ACTION = "sts:SetSourceIdentity"
 
 _FAKE_STS_CREDENTIALS: dict[str, Any] = {
     "AccessKeyId": "ASIAIOSFODNN7EXAMPLE",
@@ -158,7 +164,14 @@ class TestVendPassesScopeTag:
         self, fake_sts: _RecordingFakeSts
     ) -> None:
         """``Tags`` is the single ``{"Key": "scope", "Value": served_scope}`` pair."""
-        vend_scoped_credentials(_ROLE_ARN, _SERVED_SCOPE, _TABLE_ARN, READ_ACTIONS)
+        vend_scoped_credentials(
+            _ROLE_ARN,
+            _SERVED_SCOPE,
+            _TABLE_ARN,
+            READ_ACTIONS,
+            subject=_SUBJECT,
+            gateway_identifier=_GATEWAY_ID,
+        )
 
         assert len(fake_sts.calls) == 1, "AssumeRole must be called exactly once"
         assert fake_sts.calls[0]["Tags"] == [
@@ -167,7 +180,14 @@ class TestVendPassesScopeTag:
 
     def test_transitive_tag_keys_not_set(self, fake_sts: _RecordingFakeSts) -> None:
         """The tag must NOT be transitive — the session never chains onward."""
-        vend_scoped_credentials(_ROLE_ARN, _SERVED_SCOPE, _TABLE_ARN, READ_ACTIONS)
+        vend_scoped_credentials(
+            _ROLE_ARN,
+            _SERVED_SCOPE,
+            _TABLE_ARN,
+            READ_ACTIONS,
+            subject=_SUBJECT,
+            gateway_identifier=_GATEWAY_ID,
+        )
 
         assert "TransitiveTagKeys" not in fake_sts.calls[0], (
             "a transitive tag would survive a further AssumeRole; the vended "
@@ -178,7 +198,14 @@ class TestVendPassesScopeTag:
         self, fake_sts: _RecordingFakeSts
     ) -> None:
         """The tag ADDS a gate; it does not replace the session policy."""
-        vend_scoped_credentials(_ROLE_ARN, _SERVED_SCOPE, _TABLE_ARN, READ_ACTIONS)
+        vend_scoped_credentials(
+            _ROLE_ARN,
+            _SERVED_SCOPE,
+            _TABLE_ARN,
+            READ_ACTIONS,
+            subject=_SUBJECT,
+            gateway_identifier=_GATEWAY_ID,
+        )
 
         assert fake_sts.calls[0]["Policy"], (
             "the inline session policy must still be passed — the two gates are "
@@ -205,7 +232,14 @@ class TestVendPassesScopeTag:
         divergence denies every request. Pinning the agreement here keeps a future
         edit from silently bricking the data path.
         """
-        vend_scoped_credentials(_ROLE_ARN, scope, _TABLE_ARN, READ_ACTIONS)
+        vend_scoped_credentials(
+            _ROLE_ARN,
+            scope,
+            _TABLE_ARN,
+            READ_ACTIONS,
+            subject=_SUBJECT,
+            gateway_identifier=_GATEWAY_ID,
+        )
 
         call = fake_sts.calls[0]
         policy = json.loads(call["Policy"])
@@ -246,7 +280,14 @@ class TestUntaggableScopeFailsClosed:
         ``KNOWN_SCOPE_GROUPS``, so the rejection is enforced at the point of use.
         """
         with pytest.raises(ScopeTagError):
-            vend_scoped_credentials(_ROLE_ARN, scope, _TABLE_ARN, READ_ACTIONS)
+            vend_scoped_credentials(
+                _ROLE_ARN,
+                scope,
+                _TABLE_ARN,
+                READ_ACTIONS,
+                subject=_SUBJECT,
+                gateway_identifier=_GATEWAY_ID,
+            )
 
         assert fake_sts.calls == [], (
             "AssumeRole must not be reached: no credential may be minted for a "
@@ -451,10 +492,15 @@ class TestIdentityPolicyIsTagConditioned:
         actions = statement["Action"]
         actions = [actions] if isinstance(actions, str) else actions
 
-        assert set(actions) == {_ASSUME_ACTION, _TAG_SESSION_ACTION}, (
+        assert set(actions) == {
+            _ASSUME_ACTION,
+            _TAG_SESSION_ACTION,
+            _SET_SOURCE_IDENTITY_ACTION,
+        }, (
             "sts:TagSession must be allowed in the TRUST policy or the tagged "
-            "AssumeRole fails; sts:AssumeRole must share the statement so the "
-            "tag condition governs the assume itself"
+            "AssumeRole fails, and sts:SetSourceIdentity must be allowed there or "
+            "the AssumeRole carrying SourceIdentity fails outright; sts:AssumeRole "
+            "must share the statement so the tag condition governs the assume itself"
         )
         assert statement["Condition"]["StringLike"] == {_REQUEST_TAG_KEY: "*"}, (
             "the trust statement must require a scope session tag to be present"

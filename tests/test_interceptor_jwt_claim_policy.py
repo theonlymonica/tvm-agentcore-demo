@@ -60,6 +60,10 @@ _ISSUER = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_TESTPOOL1"
 #: never be attributed to the group mapping failing closed for another reason.
 _RESOLVABLE_GROUP = "payments-core"
 
+#: A Cognito-shaped `sub` (UUID). 36 characters of hex and hyphens, so it satisfies
+#: the STS SourceIdentity pattern and length window without any derivation.
+_SUBJECT = "11111111-2222-3333-4444-555555555555"
+
 
 def _access_claims(**overrides: Any) -> dict[str, Any]:
     """Return a valid Cognito ACCESS-token claim set, with optional overrides.
@@ -79,6 +83,10 @@ def _access_claims(**overrides: Any) -> dict[str, Any]:
         "token_use": "access",
         "client_id": _TRUSTED_CLIENT,
         "cognito:groups": [_RESOLVABLE_GROUP],
+        # `sub` is required for a token to resolve at all: the interceptor passes
+        # it to STS as SourceIdentity, and a scope without a subject would vend a
+        # credential nobody can be held to. A UUID, as Cognito emits.
+        "sub": _SUBJECT,
     }
     for key, value in overrides.items():
         if value is None:
