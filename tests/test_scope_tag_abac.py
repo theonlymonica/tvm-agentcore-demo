@@ -373,20 +373,26 @@ def abac_template() -> Template:
 
 
 def _role_by_name(template: Template, role_name: str) -> dict[str, Any]:
-    """Return the ``AWS::IAM::Role`` properties whose ``RoleName`` matches.
+    """Return the ``AWS::IAM::Role`` properties for a scoped role.
+
+    Located by the construct-derived LOGICAL id prefix, not by ``RoleName``: the
+    roles deliberately carry no explicit physical name (a fixed IAM role name is
+    unique per account and makes the stack un-redeployable after a teardown that
+    leaves one behind — see ``cdk/documents_roles.py``). The logical id is
+    ``<construct id><hash>``, so the construct id is a stable prefix.
 
     Args:
         template: The synthesized template.
-        role_name: The frozen role name (``DocumentsAccessRole`` /
+        role_name: The construct id (``DocumentsAccessRole`` /
             ``DocumentsWriteRole``).
 
     Returns:
         The role's ``Properties`` mapping.
     """
-    for resource in template.find_resources("AWS::IAM::Role").values():
-        if resource["Properties"].get("RoleName") == role_name:
+    for logical_id, resource in template.find_resources("AWS::IAM::Role").items():
+        if logical_id.startswith(role_name):
             return resource["Properties"]
-    raise AssertionError(f"no AWS::IAM::Role named {role_name!r} in the template")
+    raise AssertionError(f"no AWS::IAM::Role with logical id starting {role_name!r}")
 
 
 def _data_allow_statements(role_properties: dict[str, Any]) -> list[dict[str, Any]]:
