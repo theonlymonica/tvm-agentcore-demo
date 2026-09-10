@@ -490,27 +490,37 @@ class TestIdentityPolicyIsTagConditioned:
         trust = _role_by_name(abac_template, role_name)["AssumeRolePolicyDocument"]
         statements = trust["Statement"]
 
-        assert len(statements) == 1, (
-            "exactly one trust statement — a second, unconditioned statement "
-            "would re-open the untagged-assume path"
+        assert len(statements) == 2, (
+            "two trust statements: the tag-conditioned assume, and "
+            "sts:SetSourceIdentity alone. The single-statement form — all three "
+            "actions under the request-tag condition — was tried live and every "
+            "vend failed with AccessDenied on sts:SetSourceIdentity"
         )
-        statement = statements[0]
-        actions = statement["Action"]
-        actions = [actions] if isinstance(actions, str) else actions
 
-        assert set(actions) == {
-            _ASSUME_ACTION,
-            _TAG_SESSION_ACTION,
-            _SET_SOURCE_IDENTITY_ACTION,
-        }, (
+        def actions_of(statement: dict[str, Any]) -> set[str]:
+            actions = statement["Action"]
+            return set([actions] if isinstance(actions, str) else actions)
+
+        conditioned = [s for s in statements if "Condition" in s]
+        assert len(conditioned) == 1, "exactly one conditioned statement"
+        statement = conditioned[0]
+
+        assert actions_of(statement) == {_ASSUME_ACTION, _TAG_SESSION_ACTION}, (
             "sts:TagSession must be allowed in the TRUST policy or the tagged "
-            "AssumeRole fails, and sts:SetSourceIdentity must be allowed there or "
-            "the AssumeRole carrying SourceIdentity fails outright; sts:AssumeRole "
-            "must share the statement so the tag condition governs the assume itself"
+            "AssumeRole fails, and sts:AssumeRole must share THIS statement so the "
+            "tag condition governs the assume itself"
         )
         assert statement["Condition"]["StringLike"] == {_REQUEST_TAG_KEY: "*"}, (
             "the trust statement must require a scope session tag to be present"
         )
+
+        # The whole point of the split: no path to an assume without the tag.
+        for candidate in statements:
+            if _ASSUME_ACTION in actions_of(candidate):
+                assert "Condition" in candidate, (
+                    "an unconditioned statement granting sts:AssumeRole would "
+                    "re-open the untagged-assume path"
+                )
 
     def test_placeholder_account_principal_does_not_ship(
         self, abac_template: Template, role_name: str

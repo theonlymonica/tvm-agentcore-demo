@@ -128,23 +128,36 @@ _REQUIRE_SCOPE_TAG_CONDITION: dict[str, Any] = {
 def _trust_document(exec_role_arns: list[str]) -> dict[str, Any]:
     """Build an ``AssumeRolePolicyDocument`` trusting exactly the given exec roles.
 
-    Produces the intended trust-policy shape: a single ``Allow`` statement whose
-    ``Principal.AWS`` lists the tool execution-role ARNs and whose ``Action`` is
-    ``sts:AssumeRole`` plus ``sts:TagSession`` plus ``sts:SetSourceIdentity``. Used
-    to REPLACE (via L1 override) the temporary ``AccountPrincipal`` placeholder
+    TWO statements, and the split is load-bearing rather than untidy:
+
+    1. ``sts:AssumeRole`` + ``sts:TagSession``, CONDITIONED on a ``scope`` session tag
+       being present (``_REQUIRE_SCOPE_TAG_CONDITION``).
+    2. ``sts:SetSourceIdentity`` alone, with NO condition.
+
+    Used to REPLACE (via L1 override) the temporary ``AccountPrincipal`` placeholder
     trust so the shipped policy names only the intended principals.
 
-    The statement is CONDITIONED on a ``scope`` session tag being present
-    (``_REQUIRE_SCOPE_TAG_CONDITION``). Two consequences, both intended:
+    WHY THE SPLIT — established by experiment, not documented anywhere. With all three
+    actions in ONE statement under the request-tag condition (the shape AWS publishes
+    in its ABAC tutorial, and the shape this file shipped first), EVERY vend failed:
 
-    - An ``AssumeRole`` WITHOUT ``Tags=[{"Key": "scope", ...}]`` is denied at the
-      trust boundary and no credential is minted at all. This is what stops the
-      "future refactor / added caller / exception path skips policy construction"
-      scenario from silently yielding table-wide cross-tenant access.
-    - All three actions live in ONE statement (the shape AWS publishes in its ABAC
-      tutorial) so the condition governs the ASSUME itself, not only the tagging or
-      the source-identity setting. A separate, unconditioned ``sts:AssumeRole``
-      statement would leave the original hole wide open.
+        is not authorized to perform: sts:SetSourceIdentity
+        on resource: arn:aws:iam::<account>:role/<DocumentsRole>
+
+    Both sides granted the action — verified by reading the LIVE policies after the
+    deploy, not the source — and IAM propagation was ruled out with a third attempt
+    more than twelve minutes later. The documentation states only that the trust
+    policy "must have the sts:SetSourceIdentity permission" and that ``AssumeRole*``
+    fails without it; it says nothing about the action being incompatible with a
+    request-tag condition.
+
+    WHY THE SPLIT IS NOT A WEAKENING. ``sts:AssumeRole`` remains tag-conditioned, so
+    an ``AssumeRole`` WITHOUT ``Tags=[{"Key": "scope", ...}]`` is still denied at the
+    trust boundary and no credential is minted at all — which is what stops a future
+    refactor, an added caller, or an exception path that skips policy construction
+    from silently yielding table-wide cross-tenant access. ``sts:SetSourceIdentity``
+    on its own authorises no assumption whatsoever: it only permits stamping an
+    identity onto a session some other, still-conditioned, grant allowed.
 
     ``sts:SetSourceIdentity`` is not hardening that can be deferred: AWS documents
     that an ``AssumeRole`` passing ``SourceIdentity`` FAILS when the role's trust
@@ -166,10 +179,16 @@ def _trust_document(exec_role_arns: list[str]) -> dict[str, Any]:
                 "Action": [
                     _ASSUME_ROLE_ACTION,
                     _TAG_SESSION_ACTION,
-                    _SET_SOURCE_IDENTITY_ACTION,
                 ],
                 "Condition": _REQUIRE_SCOPE_TAG_CONDITION,
-            }
+            },
+            {
+                # Unconditioned ON PURPOSE — see the docstring. Grants no ability to
+                # assume anything; the conditioned statement above is what gates that.
+                "Effect": "Allow",
+                "Principal": {"AWS": exec_role_arns},
+                "Action": [_SET_SOURCE_IDENTITY_ACTION],
+            },
         ],
     }
 

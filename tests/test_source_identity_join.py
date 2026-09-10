@@ -600,12 +600,21 @@ class TestTrustPolicyGrantsSetSourceIdentity:
         trust = _role_by_name(full_template, role_name)["AssumeRolePolicyDocument"]
         statements = trust["Statement"]
 
-        assert len(statements) == 1, (
-            "exactly one trust statement — a second, unconditioned statement would "
-            "re-open the untagged-assume path"
+        assert len(statements) == 2, (
+            "two trust statements: the tag-conditioned assume, and "
+            "sts:SetSourceIdentity alone with no condition. Live experiment: with "
+            "all three actions under the request-tag condition every vend failed "
+            "with AccessDenied on sts:SetSourceIdentity, undocumented"
         )
-        actions = statements[0]["Action"]
-        actions = [actions] if isinstance(actions, str) else actions
+        actions = [
+            action
+            for statement in statements
+            for action in (
+                [statement["Action"]]
+                if isinstance(statement["Action"], str)
+                else statement["Action"]
+            )
+        ]
 
         assert _SET_SOURCE_IDENTITY_ACTION in actions, (
             "sts:SetSourceIdentity must be allowed in the TRUST policy or the "
@@ -617,26 +626,84 @@ class TestTrustPolicyGrantsSetSourceIdentity:
         ["DocumentsAccessRole", "DocumentsWriteRole"],
         ids=["read-role", "write-role"],
     )
-    def test_all_three_actions_share_the_conditioned_statement(
+    def test_source_identity_sits_in_its_own_unconditioned_statement(
         self, full_template: Template, role_name: str
     ) -> None:
-        """The scope-tag condition must still govern the assume itself.
+        """Two statements, and the split is what makes the vend work at all.
 
-        Splitting ``sts:AssumeRole`` into its own unconditioned statement to make
-        room for the new action would re-open the untagged-assume hole, so the
-        action set and the condition are pinned together.
+        This test previously asserted the opposite — that all three actions shared
+        the conditioned statement, which is the shape AWS publishes in its ABAC
+        tutorial. That shape does not work. Live, every vend failed with:
+
+            is not authorized to perform: sts:SetSourceIdentity
+            on resource: arn:aws:iam::<account>:role/<DocumentsRole>
+
+        with both sides granting the action (verified on the LIVE policies, not the
+        source) and IAM propagation ruled out by a retry twelve minutes later. The
+        behaviour is not documented anywhere.
+
+        So the invariant is now: the ASSUME stays tag-conditioned, and
+        ``sts:SetSourceIdentity`` lives alone in a statement with no condition. That
+        is not a weakening — ``sts:SetSourceIdentity`` by itself authorises no
+        assumption, it only permits stamping an identity onto a session that the
+        conditioned statement already allowed.
         """
         trust = _role_by_name(full_template, role_name)["AssumeRolePolicyDocument"]
-        statement = trust["Statement"][0]
-        actions = statement["Action"]
-        actions = [actions] if isinstance(actions, str) else actions
+        statements = trust["Statement"]
 
-        assert set(actions) == {
-            _ASSUME_ACTION,
-            _TAG_SESSION_ACTION,
-            _SET_SOURCE_IDENTITY_ACTION,
+        assert len(statements) == 2, (
+            "expected exactly two trust statements: the tag-conditioned assume and "
+            f"the unconditioned SetSourceIdentity; got {len(statements)}"
+        )
+
+        def actions_of(statement: dict[str, Any]) -> set[str]:
+            actions = statement["Action"]
+            return set([actions] if isinstance(actions, str) else actions)
+
+        conditioned = [s for s in statements if "Condition" in s]
+        unconditioned = [s for s in statements if "Condition" not in s]
+
+        assert len(conditioned) == 1 and len(unconditioned) == 1
+
+        assert actions_of(conditioned[0]) == {_ASSUME_ACTION, _TAG_SESSION_ACTION}, (
+            "the conditioned statement must carry the assume and the tagging, so the "
+            "scope-tag condition governs the assume itself"
+        )
+        assert conditioned[0]["Condition"]["StringLike"] == {
+            "aws:RequestTag/scope": "*"
         }
-        assert statement["Condition"]["StringLike"] == {"aws:RequestTag/scope": "*"}
+
+        assert actions_of(unconditioned[0]) == {_SET_SOURCE_IDENTITY_ACTION}, (
+            "the unconditioned statement must grant SetSourceIdentity and NOTHING "
+            "else — an unconditioned sts:AssumeRole here would re-open the "
+            "untagged-assume hole"
+        )
+
+    @pytest.mark.parametrize(
+        "role_name",
+        ["DocumentsAccessRole", "DocumentsWriteRole"],
+        ids=["read-role", "write-role"],
+    )
+    def test_no_statement_grants_assume_without_the_condition(
+        self, full_template: Template, role_name: str
+    ) -> None:
+        """The hole the split could have opened, asserted shut.
+
+        Kept separate from the shape test above so that a future refactor which
+        merges or reorders the statements still fails here if it lets an untagged
+        assume through.
+        """
+        trust = _role_by_name(full_template, role_name)["AssumeRolePolicyDocument"]
+
+        for statement in trust["Statement"]:
+            actions = statement["Action"]
+            actions = [actions] if isinstance(actions, str) else actions
+            if _ASSUME_ACTION in actions:
+                assert "Condition" in statement, (
+                    "a statement granting sts:AssumeRole with no condition would "
+                    "allow a vend with no scope tag, which is the whole hole this "
+                    "trust policy exists to close"
+                )
 
     def test_interceptor_identity_policy_allows_set_source_identity(
         self, full_template: Template
