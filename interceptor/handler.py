@@ -55,6 +55,8 @@ from typing import Any, Optional
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
+from interceptor.audit_record import build_audit_record, emit_audit_record
+from interceptor.handler_envelopes import allow, short_circuit_error
 from interceptor.jwt_claims import verified_identity_from_authorization
 from interceptor.scoped_credentials import (
     READ_ACTIONS,
@@ -227,6 +229,32 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     # touched; the interceptor adds exactly one new key, `context` (below).
     arguments = params.get("arguments", {}) or {}
 
+    # --- Work item 2: the audit record, written BEFORE any credential exists ----
+    # This is the only place in the system that holds the requested tool, the
+    # ORIGINAL model-supplied arguments and the granted scope at the same time.
+    # Its position in this function is the security property, not an accident of
+    # ordering: `creds` does not exist yet, so this record CANNOT carry a credential.
+    # Do not move this below the vend.
+    # Writing it here also means a call whose vend FAILS is still audited — a
+    # refused access attempt is exactly what an auditor needs to see. The record
+    # states what was REQUESTED and GRANTED, never what succeeded. The trace headers
+    # are read HERE, in the trusted gateway-side component, rather than reported by
+    # the agent: the agent is the party this architecture assumes may be hostile.
+    emit_audit_record(
+        logger,
+        build_audit_record(
+            tool_requested=params.get("name", ""),
+            tool_classified=tool,
+            arguments=arguments,
+            granted_scope=served_scope,
+            subject=identity.subject,
+            gateway_session_id=session_id,
+            request_id=body.get("id"),
+            trace_id=_get_header(headers, "x-amzn-trace-id"),
+            traceparent=_get_header(headers, "traceparent"),
+        ),
+    )
+
     # --- Vend scoped credentials in the interceptor -----------------------------
     # The tool execution roles hold NO sts:AssumeRole and NO DynamoDB permission.
     # The interceptor assumes the read/write role with a LeadingKeys session
@@ -293,54 +321,15 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _allow(body: dict[str, Any]) -> dict[str, Any]:
-    """Build a pass-through / allow REQUEST-interceptor output envelope.
-
-    Args:
-        body: The (possibly scope-injected) JSON-RPC request body to forward.
-
-    Returns:
-        An ``interceptorOutputVersion: "1.0"`` envelope carrying
-        ``mcp.transformedGatewayRequest.body``.
-    """
-    return {
-        "interceptorOutputVersion": "1.0",
-        "mcp": {"transformedGatewayRequest": {"body": body}},
-    }
-
-
-def _short_circuit_error(req_id: Optional[Any], text: str) -> dict[str, Any]:
-    """Build a fail-closed short-circuit REQUEST-interceptor output envelope.
-
-    When ``transformedGatewayResponse`` is present the gateway responds with it
-    immediately without calling the target, so no document read occurs. The
-    JSON-RPC result carries ``isError`` true and a GENERIC message with no
-    scope detail.
-
-    Args:
-        req_id: The JSON-RPC request id to echo back (may be None).
-        text: The generic, detail-free error message.
-
-    Returns:
-        An ``interceptorOutputVersion: "1.0"`` envelope carrying
-        ``mcp.transformedGatewayResponse``.
-    """
-    return {
-        "interceptorOutputVersion": "1.0",
-        "mcp": {
-            "transformedGatewayResponse": {
-                "statusCode": 200,
-                "body": {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "result": {
-                        "content": [{"type": "text", "text": text}],
-                        "isError": True,
-                    },
-                },
-            }
-        },
-    }
+# ---------------------------------------------------------------------------
+# Interceptor output envelope builders
+# ---------------------------------------------------------------------------
+# Moved to interceptor/handler_envelopes.py when this file reached the 400-line
+# hard limit. Re-bound to their original private names so every existing caller and
+# test keeps addressing `handler._allow` / `handler._short_circuit_error` — the
+# extraction is a file move, not a change to this module's surface.
+_allow = allow
+_short_circuit_error = short_circuit_error
 
 
 # === Credential-vending helper ===============================================
