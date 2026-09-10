@@ -54,12 +54,18 @@ import aws_cdk.aws_lambda as lambda_
 from constructs import Construct
 
 from asset_packaging import ASSET_EXCLUDE, python_lambda_code
+from audit_trail import create_audit_trail
 from auth_resources import SCOPE_GROUPS, create_auth_resources
 from data_resources import DataResources, create_data_resources
 from gateway_resources import create_gateway
 from lambda_iam import wire_lambda_iam
-from observability import TOOL_RESERVED_CONCURRENCY, lambda_log_group
+from observability import (
+    AUDIT_LOG_RETENTION,
+    TOOL_RESERVED_CONCURRENCY,
+    lambda_log_group,
+)
 from policy_resources import add_cedar_policies, create_policy_engine
+from reasoning_trail import create_reasoning_trail_destination
 from runtime_resources import create_runtime
 
 # Add the repo root to sys.path so we can import shared.config_loader
@@ -96,6 +102,29 @@ class ScopedCredentialsStack(cdk.Stack):
         # Data layer: DocumentsTable, scoped roles, seed
         # ---------------------------------------------------------------
         data = create_data_resources(self)
+
+        # ---------------------------------------------------------------
+        # Audit trail: DynamoDB data events for the Documents table, plus
+        # AgentCore runtime invocations. The AssumeRole event carrying
+        # SourceIdentity is free in Event history, but the table access performed
+        # WITH those credentials is a data-plane event and is recorded nowhere
+        # unless a trail selects it.
+        # BILLED PER DATA EVENT — see cdk/audit_trail.py for the cost note and the
+        # narrowings that bound it.
+        # ---------------------------------------------------------------
+        self.audit_trail = create_audit_trail(
+            scope=self,
+            documents_table_arn=data.documents_table_arn,
+        )
+
+        # ---------------------------------------------------------------
+        # Reasoning trail destination: log group + the role Bedrock assumes.
+        # Creating these logs NOTHING. Model invocation logging is an
+        # account-and-Region-wide switch covering every Bedrock invocation in the
+        # account, so it is deliberately NOT flipped by a deploy — see
+        # cdk/reasoning_trail.py for why.
+        # ---------------------------------------------------------------
+        self.reasoning_trail = create_reasoning_trail_destination(scope=self)
 
         # ---------------------------------------------------------------
         # Lambda functions (three tools + REQUEST interceptor)
@@ -343,6 +372,11 @@ class ScopedCredentialsStack(cdk.Stack):
                 self,
                 "SessionGuardFunctionLogGroup",
                 function_name="scoped-credentials-session-guard",
+                # Audit-grade retention: this group holds the per-tool-call audit
+                # record, the ONLY source for which tool was requested, with which
+                # original arguments, and which scope was granted. See
+                # AUDIT_LOG_RETENTION in cdk/observability.py.
+                retention=AUDIT_LOG_RETENTION,
             ),
             environment=interceptor_env,
         )

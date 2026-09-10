@@ -44,6 +44,25 @@ from constructs import Construct
 # Retention applied to every first-party Lambda log group (see module docstring).
 LAMBDA_LOG_RETENTION = logs.RetentionDays.ONE_MONTH
 
+# Retention for a log group that holds AUDIT records rather than operational output.
+#
+# Why a second, longer value instead of raising LAMBDA_LOG_RETENTION for everything:
+# only the REQUEST interceptor writes the per-tool-call audit record, and that record
+# is the ONLY source for three of the auditor's questions — which tool was requested,
+# with which original arguments, and which scope was granted. CloudTrail answers the
+# other questions and keeps its own clocks: the AssumeRole event lives 90 days in
+# Event history, and the DynamoDB data event lives as long as the trail's bucket does.
+# At ONE_MONTH the interceptor group was the shortest link in the chain, so the whole
+# chain expired in 30 days while its other halves were still readable — an audit
+# answerable only for a third of its shortest neighbour's window.
+#
+# THREE_MONTHS aligns it with the 90-day Event history ceiling, which is the longest
+# window CloudTrail management events can be read for without a second trail. Raising
+# the shared constant instead would extend retention for the three tool Lambdas and
+# the seed function too, none of which hold audit records — paying for storage that
+# answers no audit question.
+AUDIT_LOG_RETENTION = logs.RetentionDays.THREE_MONTHS
+
 # Reserved concurrency for the three tool Lambdas.
 #
 # Reserved concurrency is both a CAP and a carve-out from the account pool: a
@@ -66,6 +85,7 @@ def lambda_log_group(
     construct_id: str,
     *,
     function_name: str,
+    retention: logs.RetentionDays | None = None,
 ) -> logs.LogGroup:
     """Create a retention-bounded, teardown-friendly Lambda log group.
 
@@ -76,7 +96,10 @@ def lambda_log_group(
         function_name: The Lambda function name whose conventional log-group
             path (``/aws/lambda/<function_name>``) this group takes. For a
             function with an auto-generated physical name, pass the stable
-            ``scoped-credentials-*`` label the group should carry instead.
+            ``toxic-flow-*`` label the group should carry instead.
+        retention: Override for the default :data:`LAMBDA_LOG_RETENTION`. Pass
+            :data:`AUDIT_LOG_RETENTION` for a group whose contents answer an audit
+            question and therefore must outlive ordinary operational logs.
 
     Returns:
         The ``logs.LogGroup`` to pass as the function's ``log_group=``.
@@ -85,6 +108,6 @@ def lambda_log_group(
         scope,
         construct_id,
         log_group_name=f"/aws/lambda/{function_name}",
-        retention=LAMBDA_LOG_RETENTION,
+        retention=retention or LAMBDA_LOG_RETENTION,
         removal_policy=cdk.RemovalPolicy.DESTROY,
     )
