@@ -269,13 +269,26 @@ def create_documents_roles(
     # AccountPrincipal delegates the assume decision to identity-based policies
     # in THIS account; nothing can assume until that wiring grants sts:AssumeRole
     # to the specific tool exec roles. See the module docstring.
+    #
+    # NO EXPLICIT role_name, deliberately. An IAM role name is unique per
+    # ACCOUNT, so a fixed physical name makes the stack un-redeployable the moment
+    # a teardown leaves either role behind: CloudFormation's pre-deployment
+    # validation refuses the change set with "Resource of type 'AWS::IAM::Role'
+    # with identifier 'DocumentsAccessRole' already exists", and the orphan cannot
+    # be adopted with `cdk import` either, because these roles' trust documents
+    # reference the interceptor's execution role via Fn::GetAtt and an import-only
+    # change set contains just the imported resources. Letting CloudFormation
+    # generate the name removes that whole failure mode. Nothing depends on the
+    # literal string: the interceptor receives both ARNs through environment
+    # variables (cdk/scoped_credentials_stack.py), the tools receive credentials
+    # rather than role names, and the synth tests locate each role by its
+    # construct-derived LOGICAL id.
     account_id = cdk.Stack.of(scope).account
     placeholder_trust = iam.AccountPrincipal(account_id)
 
     documents_access_role = iam.Role(
         scope,
         "DocumentsAccessRole",
-        role_name="DocumentsAccessRole",
         assumed_by=placeholder_trust,
         description=(
             "READ role (GetItem/Query on DocumentsTable). Assumed by the REQUEST "
@@ -329,7 +342,6 @@ def create_documents_roles(
     documents_write_role = iam.Role(
         scope,
         "DocumentsWriteRole",
-        role_name="DocumentsWriteRole",
         assumed_by=placeholder_trust,
         description=(
             "WRITE role (UpdateItem only on DocumentsTable). Assumed by the REQUEST "

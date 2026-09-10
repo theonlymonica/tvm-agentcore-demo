@@ -86,16 +86,37 @@ Shared STS client (latency optimization):
 Functions:
     build_session_policy: Build the inline session policy JSON string, pinned in
         space (LeadingKeys) AND time (DateLessThan/aws:CurrentTime). Pure.
+    build_role_session_name: Derive a valid, deterministic ``RoleSessionName`` from
+        the Gateway-supplied identifier — the audit join key. Pure.
     vend_scoped_credentials: AssumeRole (DurationSeconds=900) with a ``scope``
-        session tag and the inline session policy; returns temp creds.
+        session tag, the inline session policy, ``SourceIdentity`` = the token's
+        ``sub``, and the derived ``RoleSessionName``; returns temp creds.
     build_tenant_context: Assemble the `context` wire-contract object.
     reset_sts_client: Drop the shared STS client (test seam only).
+
+Attribution (why this module sets two identity parameters):
+    The session policy and the session tag answer "what may this credential
+    touch". They say nothing about "who caused this". ``SourceIdentity`` (the
+    Cognito ``sub``) and ``RoleSessionName`` (derived from the Gateway identifier)
+    are what make every DynamoDB action taken with a vended credential
+    attributable in CloudTrail to a person and to a request. Neither is ever read
+    from the request body: the body is written by the model, so a body-derived
+    identity would let an injected model choose how it is logged.
+
+    - ``SourceIdentity`` is immutable once set and is present in the request
+      context of every subsequent action, and it persists across role chaining:
+      https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html
+    - Every role in the path must allow ``sts:SetSourceIdentity`` in its TRUST
+      policy or the ``AssumeRole`` fails outright (wired in cdk/lambda_iam.py):
+      https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_control-access_monitor.html
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -216,8 +237,177 @@ _SESSION_DURATION_SECONDS = 900
 # is unusable after one minute.
 _SESSION_POLICY_TTL_SECONDS = 60
 
-# IAM RoleSessionName maximum length (STS constraint).
-_ROLE_SESSION_NAME_MAX_LEN = 64
+# ---------------------------------------------------------------------------
+# STS identity-parameter constraints (AssumeRole request parameters).
+# ---------------------------------------------------------------------------
+# Both RoleSessionName and SourceIdentity are validated by STS against the SAME
+# published regex and the SAME length window, per the AssumeRole API reference:
+#   RoleSessionName — "Length Constraints: Minimum length of 2. Maximum length of
+#     64. Pattern: [\w+=,.@-]*"
+#   SourceIdentity  — "Length Constraints: Minimum length of 2. Maximum length of
+#     64. Pattern: [\w+=,.@-]*" ... "You cannot use a value that begins with the
+#     text aws:. This prefix is reserved for AWS internal use."
+#   https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html
+#
+# DOCUMENTATION CONTRADICTION, recorded rather than resolved in our favour: the
+# IAM User Guide's "Things to know about source identity" states the value "must
+# be between 2 and 256 characters long", while the AssumeRole API reference above
+# states a maximum of 64 for the same parameter
+# (https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_control-access_monitor.html).
+# The two AWS pages disagree. This module enforces the STRICTER bound (64), on the
+# reasoning that the API reference describes the validator the request actually
+# meets, and that a value accepted by the stricter rule is accepted by both. The
+# choice is immaterial for the value we pass — a Cognito `sub` is a 36-character
+# UUID — but it is enforced explicitly so a future non-UUID subject cannot silently
+# depend on the looser reading.
+_STS_NAME_MIN_LEN = 2
+_STS_NAME_MAX_LEN = 64
+
+#: The published character class for both parameters. `re.ASCII` is REQUIRED: in
+#: Python `\w` matches Unicode word characters by default, so without it a subject
+#: containing e.g. a Cyrillic letter or a full-width digit would pass this local
+#: check and then be rejected by STS — turning a clean fail-closed refusal into an
+#: opaque runtime AccessDenied. IAM's "upper- and lower-case alphanumeric
+#: characters" means ASCII.
+_STS_NAME_PATTERN = re.compile(r"\A[\w+=,.@-]+\Z", re.ASCII)
+
+#: Reserved prefix STS refuses on SourceIdentity ("reserved for AWS internal use").
+#: Compared case-insensitively: the documentation names the literal `aws:`, and a
+#: value differing only in case is close enough to a reserved value that accepting
+#: it would be a spoofing surface, not a convenience.
+_RESERVED_SOURCE_IDENTITY_PREFIX = "aws:"
+
+#: RoleSessionName prefixes distinguishing the two derivations below. They are
+#: deliberately DIFFERENT so an auditor reading a CloudTrail event knows, without
+#: guessing, whether the remainder is the Gateway identifier verbatim or its
+#: digest — the two can never be confused for one another.
+_SESSION_NAME_VERBATIM_PREFIX = "gw-"
+_SESSION_NAME_DIGEST_PREFIX = "gwh-"
+
+#: Digest length (hex chars) used when the Gateway identifier cannot be carried
+#: verbatim. 32 hex chars = 128 bits of SHA-256, which keeps `gwh-` + digest at 36
+#: characters (inside the 64 ceiling) while leaving collision probability
+#: negligible for the number of sessions any deployment will ever open.
+_SESSION_NAME_DIGEST_LEN = 32
+
+
+class SourceIdentityError(RuntimeError):
+    """A subject cannot be safely expressed as an STS ``SourceIdentity``.
+
+    Subclasses ``RuntimeError`` deliberately, for the same reason as
+    :class:`ScopeTagError`: the REQUEST interceptor handler already catches
+    ``RuntimeError`` on the vend path and fails closed with a generic, detail-free
+    short-circuit error, so a rejected subject takes the existing fail-closed route
+    and hands the tool no credential.
+    """
+
+
+class RoleSessionNameError(RuntimeError):
+    """A Gateway identifier cannot be turned into an STS ``RoleSessionName``.
+
+    Raised only when there is no identifier at all. A present-but-awkward
+    identifier is never an error — it is digested (see
+    :func:`build_role_session_name`). Subclasses ``RuntimeError`` so it takes the
+    handler's existing fail-closed route.
+    """
+
+
+def _source_identity_or_raise(subject: str) -> str:
+    """Return ``subject`` as a valid STS ``SourceIdentity``, or fail closed.
+
+    Validates against the published AssumeRole constraints BEFORE the call, so a
+    bad value is refused without minting anything, rather than surfacing as an
+    opaque STS ``ValidationError`` after the fact.
+
+    The value is NEVER trimmed, padded, transliterated or otherwise repaired. A
+    subject that does not satisfy the constraints is refused, because silently
+    rewriting an identity is worse than refusing one: the audit trail would then
+    name a person who does not exist under that identifier.
+
+    Args:
+        subject: The ``sub`` claim from the verified access token.
+
+    Returns:
+        The subject unchanged, once validated.
+
+    Raises:
+        SourceIdentityError: If the subject is empty, outside the 2–64 length
+            window, contains a character outside ``[\\w+=,.@-]`` (ASCII), or begins
+            with the reserved ``aws:`` prefix. Raised BEFORE ``AssumeRole``, so no
+            credential is minted. The offending value is NOT echoed into the
+            message — it identifies a person.
+    """
+    if not subject:
+        raise SourceIdentityError("subject is empty; refusing to vend an unattributed session")
+    if len(subject) < _STS_NAME_MIN_LEN:
+        raise SourceIdentityError("subject is shorter than the STS SourceIdentity minimum")
+    if len(subject) > _STS_NAME_MAX_LEN:
+        raise SourceIdentityError("subject exceeds the STS SourceIdentity length limit")
+    if subject.lower().startswith(_RESERVED_SOURCE_IDENTITY_PREFIX):
+        raise SourceIdentityError("subject uses the reserved 'aws:' SourceIdentity prefix")
+    if not _STS_NAME_PATTERN.match(subject):
+        raise SourceIdentityError("subject contains a character STS SourceIdentity forbids")
+    return subject
+
+
+def build_role_session_name(gateway_identifier: str) -> str:
+    """Derive a valid, deterministic ``RoleSessionName`` from a Gateway identifier.
+
+    The session name is the join key: it is the field an auditor reads in the
+    CloudTrail ``AssumeRole`` event and in the ``sessionContext`` of every
+    subsequent DynamoDB data event, and it is what ties both back to the
+    interceptor's own record of the Gateway request.
+
+    The identifier is supplied by the GATEWAY (the ``Mcp-Session-Id`` request
+    header). It is never taken from the request body — the body is written by the
+    model, so a body-derived session name would let an injected model choose its
+    own audit identity, which is the whole failure this is meant to prevent.
+
+    Derivation, deterministic and total (the same input always yields the same
+    output, and every non-empty input yields a valid name):
+
+    - If the identifier already satisfies the STS pattern AND fits inside the
+      64-character ceiling once prefixed, the name is
+      ``gw-<identifier>`` — the identifier survives verbatim, so an operator can
+      match it against the Gateway session by eye.
+    - Otherwise the name is ``gwh-<sha256(identifier)[:32]>``. This covers an
+      identifier that is too long, or that contains a character STS forbids (a
+      colon or a slash, for instance). SHA-256 is used as a *deterministic
+      shortening*, not as a secret: the identifier is not confidential, and the
+      digest's only job is to be stable and collision-free so the join still holds.
+
+    The two prefixes differ so the two forms are never ambiguous.
+
+    Args:
+        gateway_identifier: The Gateway-supplied request/session identifier.
+
+    Returns:
+        A ``RoleSessionName`` of at most 64 characters matching ``[\\w+=,.@-]+``.
+
+    Raises:
+        RoleSessionNameError: If the identifier is empty or absent. There is no
+            fallback: without a Gateway identifier the vended session would be
+            unjoinable to the request that caused it, which defeats the purpose of
+            setting the name at all, so the call fails closed instead.
+    """
+    if not gateway_identifier or not isinstance(gateway_identifier, str):
+        raise RoleSessionNameError(
+            "no Gateway identifier; refusing to vend a session that cannot be joined"
+        )
+    identifier = gateway_identifier.strip()
+    if not identifier:
+        raise RoleSessionNameError(
+            "no Gateway identifier; refusing to vend a session that cannot be joined"
+        )
+
+    verbatim = f"{_SESSION_NAME_VERBATIM_PREFIX}{identifier}"
+    if len(verbatim) <= _STS_NAME_MAX_LEN and _STS_NAME_PATTERN.match(verbatim):
+        return verbatim
+
+    digest = hashlib.sha256(identifier.encode("utf-8")).hexdigest()[
+        :_SESSION_NAME_DIGEST_LEN
+    ]
+    return f"{_SESSION_NAME_DIGEST_PREFIX}{digest}"
 
 # ---------------------------------------------------------------------------
 # Shared, tenant-agnostic STS client (see the module docstring for why this is
@@ -350,30 +540,56 @@ def vend_scoped_credentials(
     served_scope: str,
     table_arn: str,
     actions: list[str],
+    *,
+    subject: str,
+    gateway_identifier: str,
 ) -> dict[str, str]:
     """Vend fresh temporary creds scoped to ``served_scope`` (no cache).
 
     Calls ``sts:AssumeRole`` **exactly once** with the inline ``LeadingKeys``
     session policy built by :func:`build_session_policy`, a ``scope`` SESSION TAG
     carrying ``served_scope`` (the roles' own ABAC condition and their trust
-    policies both require it), and ``DurationSeconds=900`` (the STS floor), and
-    returns ONLY the three snake_case credential strings the
-    tool needs. There is NO cache and NO ``cache_hit`` flag: every call vends its
-    own session, so the one-minute ``aws:CurrentTime``
+    policies both require it), ``SourceIdentity`` carrying ``subject``, a
+    ``RoleSessionName`` derived from ``gateway_identifier``, and
+    ``DurationSeconds=900`` (the STS floor). It returns ONLY the three snake_case
+    credential strings the tool needs. There is NO cache and NO ``cache_hit``
+    flag: every call vends its own session, so the one-minute ``aws:CurrentTime``
     policy window can never hand out already-expired cached credentials. The
     credentials are confined to the ``served_scope`` partition for ``actions`` by
     TWO independent controls — the session policy AND the role's tag-conditioned
     identity policy.
+
+    ``subject`` and ``gateway_identifier`` are REQUIRED KEYWORD arguments, with no
+    defaults, on purpose: an unattributed or unjoinable session must be
+    impossible to express, not merely discouraged. A default would let a future
+    call site vend a credential that CloudTrail cannot tie to a person or to a
+    request, and it would do so silently.
+
+    What each identity parameter buys, and why both are needed:
+
+    - ``SourceIdentity`` answers *which human*. It is immutable once set, is
+      present in the request context of every action the session takes, and
+      persists across role chaining — so it cannot be re-labelled downstream.
+    - ``RoleSessionName`` answers *which Gateway request*. It is caller-settable
+      per assume (that is precisely why it is the request-grained field), and it
+      appears in the assumed-role ARN, so it lands in the ``sessionContext`` of
+      every DynamoDB data event the credentials produce.
 
     Args:
         role_arn: ARN of the scoped role to assume (read or write role).
         served_scope: The authoritative scope to confine the session to.
         table_arn: ARN of the Documents table (session-policy Resource).
         actions: :data:`READ_ACTIONS` or :data:`WRITE_ACTIONS`.
+        subject: The ``sub`` claim of the verified access token, passed as
+            ``SourceIdentity``. Never a request-body value.
+        gateway_identifier: The Gateway-supplied request/session identifier, from
+            which the ``RoleSessionName`` is derived. Never a request-body value.
 
     Returns:
         A single credentials dict with exactly ``access_key_id`` /
         ``secret_access_key`` / ``session_token`` (no ``cache_hit``, no tuple).
+        Deliberately UNCHANGED by this work item: this dict is the wire contract
+        the tool receives, so no audit field is smuggled into it.
 
     Raises:
         ScopeTagError: If ``served_scope`` cannot be safely expressed as a session
@@ -382,15 +598,20 @@ def vend_scoped_credentials(
             credential is minted. It subclasses ``RuntimeError``, which the
             handler already catches on the vend path, so it takes the same
             fail-closed route as an STS error.
+        SourceIdentityError: If ``subject`` cannot be expressed as an STS
+            ``SourceIdentity``. Also raised BEFORE ``AssumeRole``, also a
+            ``RuntimeError``.
+        RoleSessionNameError: If ``gateway_identifier`` is empty. Also raised
+            BEFORE ``AssumeRole``, also a ``RuntimeError``.
         botocore.exceptions.ClientError / BotoCoreError: If ``AssumeRole`` fails.
             The error is PROPAGATED unchanged — it is never swallowed into a
             partial or ``None`` credential. The caller (the REQUEST interceptor
             handler) catches it and fails closed with a generic, detail-free
-            short-circuit error that discloses no scope, role, table, or
+            short-circuit error that discloses no scope, role, table, subject, or
             credential detail, handing the tool no credential and no fallback
-            route to the table. A trust-policy rejection of an
-            UNTAGGED assume surfaces here as ``AccessDenied`` and takes the same
-            route.
+            route to the table. A trust-policy rejection of an UNTAGGED assume, or
+            of an assume whose principal lacks ``sts:SetSourceIdentity``, surfaces
+            here as ``AccessDenied`` and takes the same route.
     """
     # Compute the caller-side expiry and pass it into the PURE
     # build_session_policy. The value is now + _SESSION_POLICY_TTL_SECONDS,
@@ -408,15 +629,22 @@ def vend_scoped_credentials(
     # and a disagreement denies every request.
     tags = _scope_tag_or_raise(served_scope)
 
+    # Validate/derive the two identity parameters BEFORE the call, for the same
+    # reason: a subject STS would reject, or a missing Gateway identifier, must
+    # refuse the vend rather than produce a credential nobody can be joined to.
+    source_identity = _source_identity_or_raise(subject)
+    role_session_name = build_role_session_name(gateway_identifier)
+
     # Vend EXACTLY ONCE: no cache read, no cache write.
     # The CLIENT is shared per container (it holds no tenant identity, see the
     # module docstring); the CREDENTIALS it returns are still vended fresh on
     # every call and are never cached.
     response = _sts_client().assume_role(
         RoleArn=role_arn,
-        RoleSessionName=f"scope-{served_scope}"[:_ROLE_SESSION_NAME_MAX_LEN],
+        RoleSessionName=role_session_name,
         Policy=build_session_policy(served_scope, table_arn, actions, expires_at),
         Tags=tags,
+        SourceIdentity=source_identity,
         DurationSeconds=_SESSION_DURATION_SECONDS,
     )
     # Map the STS Credentials response into EXACTLY the three snake_case fields

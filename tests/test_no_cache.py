@@ -47,6 +47,10 @@ _ROLE_ARN = "arn:aws:iam::123456789012:role/DocumentsAccessRole"
 _SERVED_SCOPE = "payments-core"
 _TABLE_ARN = "arn:aws:dynamodb:us-east-1:123456789012:table/DocumentsTable"
 
+#: Identity parameters the vend now requires (see interceptor.scoped_credentials).
+_SUBJECT = "11111111-2222-3333-4444-555555555555"
+_GATEWAY_ID = "mcp-session-0001"
+
 #: The exact set of keys a vended credentials dict must carry — the three
 #: snake_case fields and nothing else (no cache-state flag, no ``Expiration``).
 _CREDENTIAL_KEYS = {"access_key_id", "secret_access_key", "session_token"}
@@ -99,8 +103,22 @@ def test_two_identical_vends_issue_two_assume_role_calls(
         lambda service_name, *a, **k: sts,
     )
 
-    first = vend_scoped_credentials(_ROLE_ARN, _SERVED_SCOPE, _TABLE_ARN, READ_ACTIONS)
-    second = vend_scoped_credentials(_ROLE_ARN, _SERVED_SCOPE, _TABLE_ARN, READ_ACTIONS)
+    first = vend_scoped_credentials(
+        _ROLE_ARN,
+        _SERVED_SCOPE,
+        _TABLE_ARN,
+        READ_ACTIONS,
+        subject=_SUBJECT,
+        gateway_identifier=_GATEWAY_ID,
+    )
+    second = vend_scoped_credentials(
+        _ROLE_ARN,
+        _SERVED_SCOPE,
+        _TABLE_ARN,
+        READ_ACTIONS,
+        subject=_SUBJECT,
+        gateway_identifier=_GATEWAY_ID,
+    )
 
     # No caching: two identical calls still issue two AssumeRole calls.
     assert sts.assume_role_calls == 2

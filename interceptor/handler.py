@@ -55,7 +55,9 @@ from typing import Any, Optional
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
-from interceptor.jwt_claims import served_scope_from_authorization
+from interceptor.audit_record import build_audit_record, emit_audit_record
+from interceptor.handler_envelopes import allow, short_circuit_error
+from interceptor.jwt_claims import verified_identity_from_authorization
 from interceptor.scoped_credentials import (
     READ_ACTIONS,
     WRITE_ACTIONS,
@@ -194,25 +196,64 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if tool not in _SCOPED_TOOLS:
         return _allow(body)
 
-    # --- Derive served_scope from the validated Authorization JWT claim ---
-    # The gateway CUSTOM_JWT authorizer already validated the token; here we
-    # only read the claim. Never log the Authorization header or the token.
-    # Resolve the header CASE-INSENSITIVELY: header field names are
+    # --- Derive the verified identity (scope AND subject) from the JWT ---
+    # The gateway CUSTOM_JWT authorizer already validated the token; the
+    # interceptor re-validates it independently and reads TWO claims from the one
+    # verified claim set: cognito:groups -> served_scope, and sub -> the subject
+    # passed to STS as SourceIdentity. Never log the Authorization header or the
+    # token. Resolve the header CASE-INSENSITIVELY: header field names are
     # case-insensitive (RFC 9110 §5.1) and the Gateway negotiates HTTP/2, which
     # lowercases field names on the wire (RFC 9113 §8.2), so the value can arrive
     # under `authorization` — a case-sensitive `headers.get("Authorization")`
     # missed it and failed closed on valid tokens (mirrors extract_session_id).
-    served_scope = served_scope_from_authorization(_get_header(headers, "authorization"))
+    identity = verified_identity_from_authorization(
+        _get_header(headers, "authorization")
+    )
 
-    # --- Fail closed: no verifiable scope -> short-circuit, no read occurs ---
-    if not served_scope:
-        logger.info("No verifiable served_scope; failing closed for %s", tool)
+    # --- Fail closed: no verifiable identity -> short-circuit, no read occurs ---
+    # This single check covers BOTH halves. A token that verifies but carries no
+    # usable `sub` fails closed exactly like an unresolvable scope: the subject is
+    # what makes the resulting DynamoDB action attributable to a person, and a
+    # credential nobody can be held to is worse than a refused request. There is
+    # deliberately NO substitution from the request body — the body is written by
+    # the model, so a body-derived subject would let an injected model choose the
+    # identity it is audited under.
+    if identity is None:
+        logger.info("No verifiable identity; failing closed for %s", tool)
         return _short_circuit_error(body.get("id"), _GENERIC_ERROR_MESSAGE)
+
+    served_scope = identity.served_scope
 
     # --- Read the model-supplied arguments (left unmodified below) ---
     # The model-supplied fields (doc_id / document_id / query / body) are never
     # touched; the interceptor adds exactly one new key, `context` (below).
     arguments = params.get("arguments", {}) or {}
+
+    # --- Work item 2: the audit record, written BEFORE any credential exists ----
+    # This is the only place in the system that holds the requested tool, the
+    # ORIGINAL model-supplied arguments and the granted scope at the same time.
+    # Its position in this function is the security property, not an accident of
+    # ordering: `creds` does not exist yet, so this record CANNOT carry a credential.
+    # Do not move this below the vend.
+    # Writing it here also means a call whose vend FAILS is still audited — a
+    # refused access attempt is exactly what an auditor needs to see. The record
+    # states what was REQUESTED and GRANTED, never what succeeded. The trace headers
+    # are read HERE, in the trusted gateway-side component, rather than reported by
+    # the agent: the agent is the party this architecture assumes may be hostile.
+    emit_audit_record(
+        logger,
+        build_audit_record(
+            tool_requested=params.get("name", ""),
+            tool_classified=tool,
+            arguments=arguments,
+            granted_scope=served_scope,
+            subject=identity.subject,
+            gateway_session_id=session_id,
+            request_id=body.get("id"),
+            trace_id=_get_header(headers, "x-amzn-trace-id"),
+            traceparent=_get_header(headers, "traceparent"),
+        ),
+    )
 
     # --- Vend scoped credentials in the interceptor -----------------------------
     # The tool execution roles hold NO sts:AssumeRole and NO DynamoDB permission.
@@ -224,7 +265,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     # failure: the tool has no fallback path to the table. NEVER log credentials.
     try:
         _t0 = time.perf_counter()
-        creds = _vend_for_tool(tool, served_scope)
+        creds = _vend_for_tool(
+            tool,
+            served_scope,
+            subject=identity.subject,
+            gateway_identifier=session_id,
+        )
         _assume_ms = (time.perf_counter() - _t0) * 1000.0
     except (ClientError, BotoCoreError, KeyError, RuntimeError) as exc:
         logger.info(
@@ -275,75 +321,47 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _allow(body: dict[str, Any]) -> dict[str, Any]:
-    """Build a pass-through / allow REQUEST-interceptor output envelope.
-
-    Args:
-        body: The (possibly scope-injected) JSON-RPC request body to forward.
-
-    Returns:
-        An ``interceptorOutputVersion: "1.0"`` envelope carrying
-        ``mcp.transformedGatewayRequest.body``.
-    """
-    return {
-        "interceptorOutputVersion": "1.0",
-        "mcp": {"transformedGatewayRequest": {"body": body}},
-    }
-
-
-def _short_circuit_error(req_id: Optional[Any], text: str) -> dict[str, Any]:
-    """Build a fail-closed short-circuit REQUEST-interceptor output envelope.
-
-    When ``transformedGatewayResponse`` is present the gateway responds with it
-    immediately without calling the target, so no document read occurs. The
-    JSON-RPC result carries ``isError`` true and a GENERIC message with no
-    scope detail.
-
-    Args:
-        req_id: The JSON-RPC request id to echo back (may be None).
-        text: The generic, detail-free error message.
-
-    Returns:
-        An ``interceptorOutputVersion: "1.0"`` envelope carrying
-        ``mcp.transformedGatewayResponse``.
-    """
-    return {
-        "interceptorOutputVersion": "1.0",
-        "mcp": {
-            "transformedGatewayResponse": {
-                "statusCode": 200,
-                "body": {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "result": {
-                        "content": [{"type": "text", "text": text}],
-                        "isError": True,
-                    },
-                },
-            }
-        },
-    }
+# ---------------------------------------------------------------------------
+# Interceptor output envelope builders
+# ---------------------------------------------------------------------------
+# Moved to interceptor/handler_envelopes.py when this file reached the 400-line
+# hard limit. Re-bound to their original private names so every existing caller and
+# test keeps addressing `handler._allow` / `handler._short_circuit_error` — the
+# extraction is a file move, not a change to this module's surface.
+_allow = allow
+_short_circuit_error = short_circuit_error
 
 
 # === Credential-vending helper ===============================================
 
 
-def _vend_for_tool(tool: str, served_scope: str) -> dict[str, str]:
+def _vend_for_tool(
+    tool: str,
+    served_scope: str,
+    *,
+    subject: str,
+    gateway_identifier: Optional[str],
+) -> dict[str, str]:
     """Vend scoped credentials for a scoped tool by assuming its role.
 
     Selects ``DocumentsWriteRole`` (``UpdateItem``) for ``reply`` and
     ``DocumentsAccessRole`` (``GetItem``/``Query``) for the read tools, then
-    assumes it with a ``LeadingKeys`` session policy scoped to ``served_scope``
-    and a ``scope`` SESSION TAG carrying the same value (``DurationSeconds=900``).
-    Both are required: the roles' identity policies confine
-    ``dynamodb:LeadingKeys`` to ``${aws:PrincipalTag/scope}`` and their trust
-    policies reject an untagged assume. Every call vends its own session — there
-    is no cache. Reads the role ARNs and table ARN from the
-    environment.
+    assumes it with a ``LeadingKeys`` session policy scoped to ``served_scope``,
+    a ``scope`` SESSION TAG carrying the same value, ``SourceIdentity`` carrying
+    ``subject``, and a ``RoleSessionName`` derived from ``gateway_identifier``
+    (``DurationSeconds=900``). The tag and policy are both required: the roles'
+    identity policies confine ``dynamodb:LeadingKeys`` to
+    ``${aws:PrincipalTag/scope}`` and their trust policies reject an untagged
+    assume. Every call vends its own session — there is no cache. Reads the role
+    ARNs and table ARN from the environment.
 
     Args:
         tool: The classified scoped tool name.
         served_scope: The authoritative, JWT-derived scope.
+        subject: The verified ``sub`` claim, passed as ``SourceIdentity``.
+        gateway_identifier: The Gateway-supplied ``Mcp-Session-Id``, from which the
+            ``RoleSessionName`` is derived. May be None, which fails closed below
+            rather than vending an unjoinable session.
 
     Returns:
         The single credentials dict from :func:`vend_scoped_credentials`
@@ -353,11 +371,14 @@ def _vend_for_tool(tool: str, served_scope: str) -> dict[str, str]:
     Raises:
         KeyError: If a required environment variable is unset (fail closed).
         RuntimeError: ``ScopeTagError`` when ``served_scope`` cannot be safely
-            expressed as the ``scope`` session tag the scoped roles require
-            — raised before ``AssumeRole``, so nothing is minted.
+            expressed as the ``scope`` session tag the scoped roles require;
+            ``SourceIdentityError`` when ``subject`` cannot be expressed as an STS
+            ``SourceIdentity``; ``RoleSessionNameError`` when
+            ``gateway_identifier`` is absent — all raised before ``AssumeRole``, so
+            nothing is minted.
         botocore.exceptions.ClientError / BotoCoreError: On ``AssumeRole``
             failure (fail closed), including a trust-policy rejection of an
-            untagged assume.
+            untagged assume or of a principal lacking ``sts:SetSourceIdentity``.
     """
     table_arn = os.environ[_ENV_TABLE_ARN]
     if tool in _WRITE_TOOLS:
@@ -366,4 +387,11 @@ def _vend_for_tool(tool: str, served_scope: str) -> dict[str, str]:
     else:
         role_arn = os.environ[_ENV_ACCESS_ROLE_ARN]
         actions = READ_ACTIONS
-    return vend_scoped_credentials(role_arn, served_scope, table_arn, actions)
+    return vend_scoped_credentials(
+        role_arn,
+        served_scope,
+        table_arn,
+        actions,
+        subject=subject,
+        gateway_identifier=gateway_identifier or "",
+    )

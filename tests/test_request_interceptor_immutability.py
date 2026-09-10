@@ -42,6 +42,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 import interceptor.handler as interceptor_handler
+from interceptor.jwt_claims import VerifiedIdentity
 
 # --- Fixed, derivable served scope. Its value is irrelevant to the property: it
 # is injected into the interceptor's DEEP COPY of the body, never into the input
@@ -230,13 +231,16 @@ def test_request_interceptor_no_event_mutation(
     # cannot alias the test's copy.
     monkeypatch.setattr(
         interceptor_handler,
-        "served_scope_from_authorization",
-        lambda _authorization: _SERVED_SCOPE,
+        "verified_identity_from_authorization",
+        lambda _authorization: VerifiedIdentity(
+            served_scope=_SERVED_SCOPE,
+            subject="11111111-2222-3333-4444-555555555555",
+        ),
     )
     monkeypatch.setattr(
         interceptor_handler,
         "_vend_for_tool",
-        lambda _tool, _scope: dict(credentials),
+        lambda _tool, _scope, **_kwargs: dict(credentials),
     )
 
     snapshot = copy.deepcopy(event)

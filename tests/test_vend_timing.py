@@ -55,6 +55,10 @@ _ROLE_ARN = "arn:aws:iam::123456789012:role/DocumentsAccessRole"
 _SERVED_SCOPE = "payments-core"
 _TABLE_ARN = "arn:aws:dynamodb:us-east-1:123456789012:table/DocumentsTable"
 
+#: Identity parameters the vend now requires (see interceptor.scoped_credentials).
+_SUBJECT = "11111111-2222-3333-4444-555555555555"
+_GATEWAY_ID = "mcp-session-0001"
+
 # The `%Y-%m-%dT%H:%M:%SZ` format the vend path writes and the tests parse back.
 _ISO_Z = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -128,7 +132,14 @@ def test_vend_current_time_tracks_wall_clock(fake_sts: _RecordingFakeSts) -> Non
     + 2`` seconds after the captured timestamp.
     """
     before = datetime.now(timezone.utc)
-    vend_scoped_credentials(_ROLE_ARN, _SERVED_SCOPE, _TABLE_ARN, READ_ACTIONS)
+    vend_scoped_credentials(
+        _ROLE_ARN,
+        _SERVED_SCOPE,
+        _TABLE_ARN,
+        READ_ACTIONS,
+        subject=_SUBJECT,
+        gateway_identifier=_GATEWAY_ID,
+    )
 
     assert len(fake_sts.calls) == 1
     current_time_str = _current_time_from_policy(fake_sts.calls[0]["Policy"])
@@ -148,7 +159,14 @@ def test_vend_calls_assume_role_once_with_duration_900(
     fake_sts: _RecordingFakeSts,
 ) -> None:
     """`assume_role` is called exactly once with ``DurationSeconds=900``."""
-    vend_scoped_credentials(_ROLE_ARN, _SERVED_SCOPE, _TABLE_ARN, READ_ACTIONS)
+    vend_scoped_credentials(
+        _ROLE_ARN,
+        _SERVED_SCOPE,
+        _TABLE_ARN,
+        READ_ACTIONS,
+        subject=_SUBJECT,
+        gateway_identifier=_GATEWAY_ID,
+    )
 
     assert len(fake_sts.calls) == 1
     assert fake_sts.calls[0]["DurationSeconds"] == 900

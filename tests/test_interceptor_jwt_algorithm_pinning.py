@@ -100,6 +100,9 @@ def _claims() -> dict[str, Any]:
         "token_use": "access",
         "client_id": _TRUSTED_CLIENT,
         "cognito:groups": [_RESOLVABLE_GROUP],
+        # Required for resolution: the interceptor passes `sub` to STS as
+        # SourceIdentity, so a token without it fails closed.
+        "sub": "11111111-2222-3333-4444-555555555555",
     }
 
 

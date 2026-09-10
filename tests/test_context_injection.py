@@ -44,6 +44,7 @@ from hypothesis import strategies as st
 
 import interceptor.handler as interceptor_handler
 import interceptor.scoped_credentials as interceptor_scoped_credentials
+from interceptor.jwt_claims import VerifiedIdentity
 
 import common.scoped_credentials as tool_scoped_credentials
 from common.scoped_credentials import (
@@ -228,7 +229,13 @@ def _tools_call_event(tool_name: str, arguments: dict[str, Any]) -> dict[str, An
     return {
         "mcp": {
             "gatewayRequest": {
-                "headers": {"Authorization": "Bearer token"},
+                "headers": {
+                    "Authorization": "Bearer token",
+                    # The Gateway-supplied identifier the RoleSessionName is
+                    # derived from. Present because the real vend path runs here
+                    # and fails closed without it.
+                    "Mcp-Session-Id": "mcp-session-0001",
+                },
                 "body": {
                     "jsonrpc": "2.0",
                     "id": 1,
@@ -294,11 +301,15 @@ def test_context_injection_contract(
         "client",
         lambda service_name, *a, **k: _FakeSts(sts_credentials),
     )
-    # Derive a fixed scope without a real JWT.
+    # Derive a fixed identity without a real JWT. The SUBJECT matters here as well
+    # as the scope: the real _vend_for_tool runs in this test (only boto3 is
+    # stubbed), and it refuses to vend without one.
     monkeypatch.setattr(
         interceptor_handler,
-        "served_scope_from_authorization",
-        lambda _auth: scope,
+        "verified_identity_from_authorization",
+        lambda _auth: VerifiedIdentity(
+            served_scope=scope, subject="11111111-2222-3333-4444-555555555555"
+        ),
     )
     # Capture the kwargs the tool-side session is built with.
     captured: dict[str, Any] = {}

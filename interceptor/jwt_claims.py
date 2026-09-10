@@ -58,6 +58,9 @@ Security:
     This module NEVER logs the Authorization header or the JWT.
 
 Functions:
+    verified_identity_from_authorization: Verify the Bearer token and return BOTH
+        the served scope and the ``sub`` subject from the SAME verified claim set,
+        or None (fail closed on either half).
     served_scope_from_authorization: Verify the Bearer token and derive
         served_scope from the validated ``cognito:groups`` claim, or None (fail
         closed).
@@ -68,7 +71,11 @@ AWS documentation references:
       issuer ``https://cognito-idp.<Region>.amazonaws.com/<userPoolId>``, RS256:
       https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-tokens-verifying-a-jwt.html
     - Cognito access-token ``cognito:groups`` claim ("An array of the names of
-      user pool groups that have your user as a member"):
+      user pool groups that have your user as a member") AND the ``sub`` claim
+      ("A unique identifier (UUID), or subject, for the authenticated user. The
+      username might not be unique in your user pool. The sub claim is the best
+      way to identify a given user"), which is why ``sub`` — not the username —
+      is the audit anchor passed to STS as ``SourceIdentity``:
       https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-the-access-token.html
     - Cognito user pool groups & the ``cognito:groups`` claim (precedence
       resolves to ``cognito:preferred_role``, NOT to claim array order — so
@@ -86,7 +93,7 @@ AWS documentation references:
 from __future__ import annotations
 
 import os
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 import jwt
 from jwt import PyJWKClient
@@ -116,6 +123,19 @@ _REQUIRED_TOKEN_USE = "access"
 #: token, so ``client_id`` — not ``aud`` — carries the app client). This is the
 #: same claim the gateway's ``allowedClients`` validates.
 _CLIENT_ID_CLAIM = "client_id"
+
+#: The subject claim: the Cognito user pool's IMMUTABLE, unique identifier for the
+#: human who signed in. This is the value the interceptor passes to STS as
+#: ``SourceIdentity`` so every DynamoDB action taken with the vended credentials is
+#: attributable in CloudTrail to a person rather than to a scope.
+#:
+#: Why ``sub`` and not ``username`` / ``email``: AWS documents ``sub`` as "A unique
+#: identifier (UUID), or subject, for the authenticated user. The username might not
+#: be unique in your user pool. The sub claim is the best way to identify a given
+#: user" — and unlike a username or an email it cannot be reassigned to a different
+#: person, which is what an audit anchor requires.
+#: https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-the-access-token.html
+_SUBJECT_CLAIM = "sub"
 
 #: Env var (comma-separated) listing the app client ids whose access tokens this
 #: interceptor accepts. Wired in ``cdk/scoped_credentials_stack.py`` from the managed app
@@ -198,26 +218,55 @@ def _allowed_client_ids() -> frozenset[str]:
 # ---------------------------------------------------------------------------
 
 
-def served_scope_from_authorization(authorization: Optional[str]) -> Optional[str]:
-    """Verify the Bearer token and derive ``served_scope`` from its claims.
+class VerifiedIdentity(NamedTuple):
+    """The two identity facts one token verification yields.
+
+    Both come from the SAME verified claim set, so they cannot disagree about who
+    the caller is: a caller whose ``sub`` says one person and whose
+    ``cognito:groups`` says another scope is impossible to construct, because
+    there is only one signature check and one claims dict behind both fields.
+
+    Attributes:
+        served_scope: The authoritative scope, resolved under the
+            single-scope-group invariant. Becomes the ``scope`` session tag and the
+            session policy's ``LeadingKeys`` value.
+        subject: The Cognito ``sub`` claim. Becomes the STS ``SourceIdentity``, so
+            CloudTrail attributes every action taken with the vended credentials to
+            this person.
+    """
+
+    served_scope: str
+    subject: str
+
+
+def verified_identity_from_authorization(
+    authorization: Optional[str],
+) -> Optional[VerifiedIdentity]:
+    """Verify the Bearer token and return BOTH the scope and the subject.
 
     Extracts the Bearer token, VERIFIES it against the Cognito user pool JWKS
-    (RS256 signature, issuer, expiry), reads the standard ``cognito:groups``
-    claim, and applies the single-scope-group invariant to select exactly one
-    served scope.
+    (RS256 signature, issuer, expiry), pins the token type and app client, then
+    reads two claims from the one verified claim set: ``cognito:groups`` (resolved
+    to a single scope under the single-scope-group invariant) and ``sub``.
+
+    FAIL CLOSED on either half. A token that verifies but carries no usable
+    ``sub`` yields None exactly as an unresolvable scope does — there is
+    deliberately no path that returns a scope without a subject, because that
+    would vend a credential nobody can be held to. The caller never falls back to
+    a request-body value: the body is model-controlled and cannot name the human.
 
     Args:
         authorization: The raw ``Authorization`` header value (expected form
             ``"Bearer <jwt>"``). May be None or malformed.
 
     Returns:
-        The single matching served-scope string, or None to fail closed when the
-        header is missing/malformed, the token fails signature/issuer/expiry
-        verification, the claim is absent, or the single-scope-group invariant is
-        not satisfied.
+        A :class:`VerifiedIdentity`, or None to fail closed when the header is
+        missing/malformed, the token fails signature/issuer/expiry verification,
+        the token type or client is not pinned, the scope cannot be resolved, or
+        the ``sub`` claim is absent or not a non-empty string.
 
     Security:
-        Never logs the header or the token.
+        Never logs the header, the token, or the claims.
     """
     if not authorization or not isinstance(authorization, str):
         return None
@@ -232,7 +281,38 @@ def served_scope_from_authorization(authorization: Optional[str]) -> Optional[st
     if claims is None:
         return None
 
-    return _scope_from_cognito_groups(claims.get(_COGNITO_GROUPS_CLAIM))
+    served_scope = _scope_from_cognito_groups(claims.get(_COGNITO_GROUPS_CLAIM))
+    if not served_scope:
+        return None
+
+    subject = _subject_from_claims(claims)
+    if not subject:
+        return None
+
+    return VerifiedIdentity(served_scope=served_scope, subject=subject)
+
+
+def served_scope_from_authorization(authorization: Optional[str]) -> Optional[str]:
+    """Verify the Bearer token and derive ``served_scope`` from its claims.
+
+    Thin wrapper over :func:`verified_identity_from_authorization`, kept because
+    the scope alone is what several callers and tests ask for. It therefore
+    inherits the SAME fail-closed conditions, including the subject requirement:
+    a token with no usable ``sub`` resolves to no scope either. That is
+    deliberate — the two facts are vended together or not at all.
+
+    Args:
+        authorization: The raw ``Authorization`` header value (expected form
+            ``"Bearer <jwt>"``). May be None or malformed.
+
+    Returns:
+        The single matching served-scope string, or None to fail closed.
+
+    Security:
+        Never logs the header or the token.
+    """
+    identity = verified_identity_from_authorization(authorization)
+    return identity.served_scope if identity else None
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +420,39 @@ def _claims_acceptable(claims: dict[str, Any]) -> bool:
         return False
 
     return True
+
+
+def _subject_from_claims(claims: dict[str, Any]) -> Optional[str]:
+    """Read the ``sub`` claim, or None (fail closed).
+
+    Accepts only a non-empty string. Requires nothing else of the value's SHAPE:
+    whether it is expressible as an STS ``SourceIdentity`` is enforced downstream
+    in ``interceptor.scoped_credentials``, at the point where the value actually
+    becomes an STS parameter, for the same reason the ``scope`` wildcard rejection
+    lives there — the check belongs where the constraint is real, not where the
+    value happens to be read.
+
+    There is deliberately NO fallback. If the claim is absent the caller fails
+    closed; it never substitutes a username, an email, a request-body field, or a
+    synthesized placeholder. A placeholder would be worse than no attribution,
+    because the audit trail would look complete while naming nobody.
+
+    Args:
+        claims: The claims mapping returned by a SUCCESSFUL ``jwt.decode`` —
+            signature, issuer, expiry, token type and client are already verified.
+
+    Returns:
+        The stripped ``sub`` value, or None when it is absent, not a string, or
+        blank.
+
+    Security:
+        Never logs the claims or the subject.
+    """
+    subject = claims.get(_SUBJECT_CLAIM)
+    if not isinstance(subject, str):
+        return None
+    subject = subject.strip()
+    return subject or None
 
 
 def _scope_from_cognito_groups(groups: Any) -> Optional[str]:

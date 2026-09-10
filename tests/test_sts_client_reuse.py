@@ -42,6 +42,10 @@ _ROLE_ARN = "arn:aws:iam::123456789012:role/DocumentsAccessRole"
 _SERVED_SCOPE = "payments-core"
 _TABLE_ARN = "arn:aws:dynamodb:us-east-1:123456789012:table/DocumentsTable"
 
+#: Identity parameters the vend now requires (see interceptor.scoped_credentials).
+_SUBJECT = "11111111-2222-3333-4444-555555555555"
+_GATEWAY_ID = "mcp-session-0001"
+
 _FAKE_CREDENTIALS: dict[str, Any] = {
     "AccessKeyId": "ASIAIOSFODNN7EXAMPLE",
     "SecretAccessKey": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
@@ -100,7 +104,12 @@ def _vend() -> dict[str, str]:
         The vended credentials dict.
     """
     return vend_scoped_credentials(
-        _ROLE_ARN, _SERVED_SCOPE, _TABLE_ARN, READ_ACTIONS
+        _ROLE_ARN,
+        _SERVED_SCOPE,
+        _TABLE_ARN,
+        READ_ACTIONS,
+        subject=_SUBJECT,
+        gateway_identifier=_GATEWAY_ID,
     )
 
 

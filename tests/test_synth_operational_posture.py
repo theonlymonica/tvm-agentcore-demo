@@ -38,6 +38,12 @@ from synth_helpers import (
 # out literally so the test fails if the constant is changed without thought.
 EXPECTED_RETENTION_DAYS = 30
 
+#: Retention for the groups that hold audit records (the REQUEST interceptor
+#: and the reasoning trail). 90 days, matching the CloudTrail Event history
+#: ceiling — see AUDIT_LOG_RETENTION in cdk/observability.py for why this is a
+#: second tier rather than a global raise.
+AUDIT_RETENTION_DAYS = 90
+
 # Mirrors observability.TOOL_RESERVED_CONCURRENCY.
 EXPECTED_TOOL_RESERVED_CONCURRENCY = 10
 
@@ -295,15 +301,55 @@ class TestLambdaLogGroups:
     def test_every_log_group_has_the_expected_finite_retention(
         self, synth: tuple[Template, dict[str, Any]]
     ) -> None:
+        """Every group is finite, and only audit-grade groups get the longer window.
+
+        Two tiers, not one, since work item 2. A group is audit-grade when its
+        contents answer one of the auditor's questions and therefore must not expire
+        before the records it is joined to:
+
+        - the REQUEST interceptor's group, holding the per-tool-call audit record —
+          the only source for which tool was requested, with which arguments, and
+          which scope was granted;
+        - the reasoning-trail group, holding Bedrock model invocations — the only
+          source for why the model asked for that tool.
+
+        Both retain AUDIT_RETENTION_DAYS to line up with the 90-day CloudTrail Event
+        history ceiling. Every other group carries operational output only and stays
+        at EXPECTED_RETENTION_DAYS; the assertion is exact per tier rather than a
+        "greater than" bound, so a group drifting UP to the audit window — paying for
+        storage that answers no audit question — fails here too.
+        """
         _template, resources = synth
         groups = _log_groups(resources)
         assert groups, "no AWS::Logs::LogGroup found — retention is unbounded"
+
+        interceptor_group_ref = (
+            _session_guard(resources)["Properties"]
+            .get("LoggingConfig", {})
+            .get("LogGroup", {})
+            .get("Ref")
+        )
+        assert interceptor_group_ref in groups, (
+            "the REQUEST interceptor's log group must be identifiable to check its "
+            f"audit retention; got {interceptor_group_ref!r}"
+        )
+
+        audit_group_refs = {interceptor_group_ref} | {
+            lid
+            for lid, group in groups.items()
+            if str(group["Properties"].get("LogGroupName", "")).startswith(
+                "/aws/bedrock/"
+            )
+        }
+
         for lid, group in groups.items():
-            assert (
-                group["Properties"].get("RetentionInDays")
-                == EXPECTED_RETENTION_DAYS
-            ), (
-                f"{lid} must retain {EXPECTED_RETENTION_DAYS} days, got "
+            expected = (
+                AUDIT_RETENTION_DAYS
+                if lid in audit_group_refs
+                else EXPECTED_RETENTION_DAYS
+            )
+            assert group["Properties"].get("RetentionInDays") == expected, (
+                f"{lid} must retain {expected} days, got "
                 f"{group['Properties'].get('RetentionInDays')!r}"
             )
 

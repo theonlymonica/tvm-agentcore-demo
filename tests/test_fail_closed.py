@@ -395,11 +395,22 @@ def test_fail_closed_no_echo(
     interceptor_scoped_credentials.reset_sts_client()
 
     # Fails closed: the error PROPAGATES (no credential is returned).
+    # The identity parameters are fixed literals rather than generated values: what
+    # this example varies is the STS failure mode, and a fixed subject lets the
+    # disclosure check below assert the subject is not echoed either.
+    subject = "11111111-2222-3333-4444-555555555555"
     with pytest.raises((ClientError, BotoCoreError)) as excinfo:
-        vend_scoped_credentials(role_arn, vend_scope, table_arn, actions)
+        vend_scoped_credentials(
+            role_arn,
+            vend_scope,
+            table_arn,
+            actions,
+            subject=subject,
+            gateway_identifier="mcp-session-0001",
+        )
 
-    # The propagated exception discloses no scope/role/table detail — the vend
-    # code adds nothing beyond the botocore default.
+    # The propagated exception discloses no scope/role/table/subject detail — the
+    # vend code adds nothing beyond the botocore default.
     disclosed = f"{excinfo.value}\n{excinfo.value.args!r}"
-    for marker in (role_arn, vend_scope, table_arn):
+    for marker in (role_arn, vend_scope, table_arn, subject):
         assert marker not in disclosed
