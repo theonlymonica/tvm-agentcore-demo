@@ -13,13 +13,16 @@ request body carrying the credential field names.
 THAT EXPOSURE IS CLOSED. The credentials now travel as allowlisted propagated
 request headers and the request body is forwarded deep-equal, so there is nothing
 credential-shaped in ``params.arguments`` for the log to copy. Re-measured with
-the delivery temporarily enabled and the real vended credentials in flight,
-across five record kinds (a successful ``tools/call``, a search, ``tools/list``,
-incorrect parameters, an unknown tool) plus BOTH authorization-failure records,
-which are the only place the observability documentation mentions headers at all:
-zero header names and zero header values, everywhere. The authorization-failure
-record carries one line (``Missing Bearer token`` / ``Invalid Bearer token``) and
-nothing else.
+the delivery temporarily enabled and the real vended credentials in flight, over
+seven legs covering THREE of the four record kinds the observability reference
+lists: start/completion (a successful ``tools/call``, a search, ``tools/list``),
+incorrect request parameters (bad parameters, an unknown tool), and
+missing/incorrect authorization headers — the last being the only kind the
+documentation mentions headers in at all. Zero header names and zero header
+values on all three. The authorization-failure record carries one line
+(``Missing Bearer token`` / ``Invalid Bearer token``) and nothing else. The fourth
+kind, "Error messages for Target configurations", is NOT measured: it would need a
+deliberately misconfigured target.
 
 THE PROHIBITION STANDS, FOR A DIFFERENT REASON. The same records showed what
 ``APPLICATION_LOGS`` does carry: a ``responseBody`` field holding the tool's full
@@ -38,10 +41,17 @@ reached by a route that never touches ``dynamodb:LeadingKeys``. Retention does n
 help either: it bounds how long a 60-second credential record survives, and a
 document does not expire.
 
-If these logs are ever needed for debugging, the shape that would be defensible
-is a delivery carrying the message and policy fields while dropping
-``requestBody`` and ``responseBody``. Whether the service permits that
-field-level selection is NOT known.
+If these logs are ever needed for debugging, there is NO configuration that keeps
+the useful part and drops the sensitive part. Field selection DOES exist —
+``CreateDelivery`` takes a ``recordFields`` parameter, and
+``aws logs describe-configuration-templates --service bedrock-agentcore
+--log-types APPLICATION_LOGS`` returns the fields allowed per resource type — and
+for ``resourceType: gateway`` with a CloudWatch Logs destination, ``body`` is
+optional, so a delivery CAN drop it. But ``body`` is the SMALLEST selectable unit,
+and ``requestBody``, ``responseBody``, the message string and the policy decision
+all live NESTED inside it. So the choice is everything or nothing: keep ``body``
+and get the documents along with the messages, or drop it and get ARNs,
+timestamps and severity with no message at all.
 
 Until this file existed, the only thing standing between that log group and a
 live cross-tenant credential leak was a ~25-line comment in

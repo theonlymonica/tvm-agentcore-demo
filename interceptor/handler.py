@@ -2,8 +2,10 @@
 Scope-injecting REQUEST interceptor for the AgentCore Gateway.
 
 Derives the authoritative ``served_scope`` from the request-time identity (a
-signature-validated JWT claim) and injects it into the tool
-arguments for the scoped tool set. It makes NO allow/block decision, reads NO
+signature-validated JWT claim) and emits it, with the vended credentials, as
+PROPAGATED REQUEST HEADERS — never into the tool arguments. The request body is
+forwarded deep-equal to the one the Gateway received; see
+``interceptor/credential_headers.py``. It makes NO allow/block decision, reads NO
 SSM, and tracks NO session state — enforcement is unconditional and structural.
 
 Behavior:
@@ -84,10 +86,13 @@ logger.setLevel(logging.INFO)
 
 _TOOLS_CALL_METHOD = "tools/call"
 
-#: Tools for which the ``context`` object is injected authoritatively. ``reply``
+#: Tools for which the credential headers are emitted authoritatively. ``reply``
 #: is included: under the composite-key table it needs the served scope to build
 #: its key and write via scoped credentials. All three are the
-#: "scoped tool set".
+#: "scoped tool set". A ``tools/call`` naming anything else is UNCLASSIFIABLE and
+#: fails closed — it is NOT passed through, because every target allowlists the
+#: four header names and a pass-through emits none of them, which would leave a
+#: client-supplied value as the only one present.
 _SCOPED_TOOLS = frozenset({"read_document", "search_documents", "reply"})
 
 #: Read-path tools -> assume DocumentsAccessRole (GetItem/Query).
@@ -150,9 +155,19 @@ def _get_header(headers: dict[str, Any] | None, name: str) -> Optional[str]:
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """REQUEST interceptor Lambda entry point.
 
-    Parses the MCP REQUEST interceptor payload, passes non-scoped traffic
-    through unchanged, and for scoped ``tools/call`` messages injects the
-    authoritative JWT-derived ``served_scope`` (or fails closed).
+    Parses the MCP REQUEST interceptor payload. Non-``tools/call`` protocol
+    messages (initialize, tools/list, notifications/initialized, ping) pass
+    through unchanged. A ``tools/call`` naming one of the three scoped tools gets
+    the authoritative JWT-derived ``served_scope`` and the vended credentials as
+    PROPAGATED REQUEST HEADERS, with the body forwarded deep-equal; anything the
+    classifier cannot place, and any call without a verifiable identity, FAILS
+    CLOSED.
+
+    Nothing is written into ``params`` / ``arguments``. An unclassifiable
+    ``tools/call`` is refused rather than passed through, because every target
+    allowlists the four credential header names and a pass-through emits none of
+    them, which would leave a client-supplied value as the only one present for
+    an allowlisted name.
 
     Args:
         event: The REQUEST interceptor payload from the gateway (see the
@@ -170,11 +185,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     # --- Event immutability ---------------------------------------------------
     # Reach the request body through the defensive `.get()` chain (never a direct
     # subscript: a KeyError would surface as a Lambda exception -> Gateway 5xx),
-    # then `copy.deepcopy` it. EVERY subsequent write into `params` / `arguments`
-    # / `context` lands on this copy only, so the object graph reachable from
-    # event["mcp"]["gatewayRequest"]["body"] stays deep-equal to its pre-call
-    # state. Pass-through paths forward this copy, which is likewise deep-equal
-    # to the input body.
+    # then `copy.deepcopy` it. Nothing is written into `params` / `arguments` at
+    # all any more — the credentials travel as headers — so the forwarded body is
+    # deep-equal to the one the Gateway sent. The deepcopy is retained as the
+    # structural guarantee of that: it makes an accidental write land on a copy
+    # instead of on the caller's object graph, so the property holds by
+    # construction rather than by everyone remembering not to write.
     body = copy.deepcopy(gateway_request.get("body", {}) or {})
 
     method = body.get("method", "")
@@ -198,9 +214,34 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         session_id if session_id else "<none>",
     )
 
-    # --- tools/call for a tool outside the scoped set -> pass through ---
+    # --- tools/call the interceptor cannot classify -> FAIL CLOSED ------------
+    # `classify_tool` returns one of the three scoped tools or UNCLASSIFIABLE, so
+    # this branch IS the unclassifiable one, and its contract says the caller
+    # fails closed. It used to pass the body through, which was harmless while the
+    # credentials rode in the body: pass-through added nothing, so there was
+    # nothing to leak.
+    #
+    # THE HEADER CHANNEL CHANGED THAT. Every Lambda target now allowlists the four
+    # `x-tvm-*` names in `metadataConfiguration.allowedRequestHeaders`, and the
+    # interceptor's precedence over a client-supplied header only applies to a
+    # header the interceptor actually WRITES. On a pass-through it writes none, so
+    # an `x-tvm-session-token` sent by the CLIENT — which, in this architecture, is
+    # the agent, the component assumed hostile — would be the only value present
+    # for an allowlisted name and would propagate to the Lambda. The tool-side
+    # reader would then be handed a credential chosen by the caller rather than
+    # vended for it.
+    #
+    # Today the Gateway resolves the tool name to a target before any Lambda is
+    # involved and answers `-32602 Unknown tool` for a name it cannot route, so
+    # the branch should be unreachable with an allowlisted target. THAT IS NOT
+    # VERIFIED, it is the Gateway's behaviour rather than this component's, and it
+    # would stop holding the moment a routable target is added that this
+    # classifier does not know. Refusing here makes the path unreachable by
+    # construction instead of by someone else's routing. Asserted by
+    # tests/test_unclassifiable_tools_call_fails_closed.py.
     if tool not in _SCOPED_TOOLS:
-        return _allow(body)
+        logger.info("Unclassifiable tools/call; failing closed")
+        return _short_circuit_error(body.get("id"), _GENERIC_ERROR_MESSAGE)
 
     # --- Derive the verified identity (scope AND subject) from the JWT ---
     # The gateway CUSTOM_JWT authorizer already validated the token; the
@@ -232,7 +273,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     # --- Read the model-supplied arguments (left unmodified below) ---
     # The model-supplied fields (doc_id / document_id / query / body) are never
-    # touched; the interceptor adds exactly one new key, `context` (below).
+    # touched, and nothing is added to them: the served scope and the vended
+    # credentials leave as propagated HEADERS, so this dict is forwarded as the
+    # model wrote it.
     arguments = params.get("arguments", {}) or {}
 
     # --- Work item 2: the audit record, written BEFORE any credential exists ----

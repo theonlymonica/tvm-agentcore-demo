@@ -92,10 +92,13 @@ def enable_gateway_tracing(
     # is forwarded deep-equal, so that capture path is closed. Measured, not
     # assumed: with APPLICATION_LOGS temporarily enabled out of band and the real
     # vended credentials in flight, the records contained ZERO header names and
-    # ZERO header values across five record kinds (successful tools/call, search,
-    # tools/list, incorrect parameters, unknown tool) plus BOTH
-    # authorization-failure records, which are the only place the observability
-    # docs mention headers at all.
+    # ZERO header values over seven legs covering THREE of the four record kinds
+    # the observability reference lists — start/completion (successful call,
+    # search, tools/list), incorrect request parameters (bad parameters, unknown
+    # tool), and missing/incorrect authorization headers, the last being the only
+    # kind the docs say touches headers at all. The fourth kind, "Error messages
+    # for Target configurations", is NOT measured: it would need a deliberately
+    # misconfigured target.
     #
     # THE PROHIBITION STANDS, FOR A DIFFERENT REASON. The same records showed what
     # APPLICATION_LOGS does carry: a `responseBody` field holding the tool's full
@@ -135,10 +138,17 @@ def enable_gateway_tracing(
     # can still take are neither prevented nor detected here: a console change,
     # or a same-name PutDeliverySource that OVERWRITES this source's logType.
     #
-    # If these logs are ever needed for debugging, the defensible shape is a
-    # delivery carrying the message and policy fields while dropping
-    # `requestBody` and `responseBody`. Whether the service permits that
-    # field-level selection is NOT known.
+    # If these logs are ever needed for debugging, there is NO configuration that
+    # keeps the useful part and drops the sensitive part. Field selection DOES
+    # exist — CreateDelivery takes a `recordFields` parameter, and
+    # `aws logs describe-configuration-templates --service bedrock-agentcore
+    # --log-types APPLICATION_LOGS` returns the fields allowed per resource type —
+    # and for resourceType=gateway with a CloudWatch Logs destination, `body` is
+    # optional, so a delivery CAN drop it. But `body` is the SMALLEST selectable
+    # unit, and `requestBody`, `responseBody`, the message string and the policy
+    # decision all live nested inside it. So the choice is everything or nothing:
+    # keep `body` and get the documents with the messages, or drop it and get ARNs
+    # and timestamps with no message at all.
     # -----------------------------------------------------------------------
     source_name = "scoped-credentials-gateway-traces-source"
     dest_name = "scoped-credentials-gateway-traces-dest"

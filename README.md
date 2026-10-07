@@ -65,11 +65,12 @@ silent containment. None of that is in this repo, on purpose.
 6. Gateway log delivery is constrained to `TRACES` only, asserted at synth time, so the
    build fails if anyone declares an `APPLICATION_LOGS` delivery source. Vended
    credentials no longer transit the request body, and the vended `APPLICATION_LOGS`
-   record was re-measured with the real credentials in flight across five record kinds
-   plus both authorization-failure records: no header name and no header value appears
+   record was re-measured with the real credentials in flight over seven legs covering
+   three of the four documented record kinds: no header name and no header value appears
    in any of them. The constraint is kept for a different reason — those records carry a
    `responseBody` field holding the tool's full answer, so a successful read would write
-   the entire document into a log group that has one partition for the whole gateway.
+   the entire document into a log group that has one partition for the whole gateway, and
+   field selection cannot help because `body` is the smallest selectable unit.
 
 ## Deploy
 

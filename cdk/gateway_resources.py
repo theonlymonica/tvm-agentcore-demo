@@ -393,12 +393,15 @@ def _create_tool_targets(
                             type=agentcore.SchemaDefinitionType.STRING,
                             description="The unique identifier of the document to read",
                         ),
-                        # No served_scope and no context property. The served
-                        # scope and the vended tenant_credentials are injected
-                        # by the REQUEST interceptor at arguments["context"]
-                        # AFTER the model writes the call, so they travel only
-                        # forward and are never advertised to the model in the
-                        # published schema.
+                        # No served_scope property, and no credential-shaped
+                        # property of any kind. The served scope and the vended
+                        # credentials reach the Lambda as PROPAGATED REQUEST
+                        # HEADERS (allowlisted below), not in the request body,
+                        # so they travel only forward and are never advertised
+                        # to the model in the published schema. This schema has
+                        # never declared them: under the earlier in-body design
+                        # they rode as an UNDECLARED arguments["context"] field
+                        # for the same reason.
                     },
                     required=["doc_id"],
                 ),
@@ -428,12 +431,15 @@ def _create_tool_targets(
                             type=agentcore.SchemaDefinitionType.STRING,
                             description="The search query to match against document titles",
                         ),
-                        # No served_scope and no context property. The served
-                        # scope and the vended tenant_credentials are injected
-                        # by the REQUEST interceptor at arguments["context"]
-                        # AFTER the model writes the call, so they travel only
-                        # forward and are never advertised to the model in the
-                        # published schema.
+                        # No served_scope property, and no credential-shaped
+                        # property of any kind. The served scope and the vended
+                        # credentials reach the Lambda as PROPAGATED REQUEST
+                        # HEADERS (allowlisted below), not in the request body,
+                        # so they travel only forward and are never advertised
+                        # to the model in the published schema. This schema has
+                        # never declared them: under the earlier in-body design
+                        # they rode as an UNDECLARED arguments["context"] field
+                        # for the same reason.
                     },
                     required=["query"],
                 ),
@@ -471,13 +477,16 @@ def _create_tool_targets(
                                 "The reply body text (maximum 4000 bytes, UTF-8)"
                             ),
                         ),
-                        # No served_scope and no context property. reply
-                        # builds the composite key {scope, doc_id}; the scope
-                        # and the vended tenant_credentials arrive via the
-                        # REQUEST interceptor at arguments["context"] AFTER the
-                        # model writes the call, so they travel only forward and
-                        # are never advertised to the model in the published
-                        # schema.
+                        # No served_scope property, and no credential-shaped
+                        # property of any kind. reply builds the composite key
+                        # {scope, doc_id}; the scope and the vended credentials
+                        # reach the Lambda as PROPAGATED REQUEST HEADERS
+                        # (allowlisted below), not in the request body, so they
+                        # travel only forward and are never advertised to the
+                        # model in the published schema. This schema has never
+                        # declared them: under the earlier in-body design they
+                        # rode as an UNDECLARED arguments["context"] field for
+                        # the same reason.
                     },
                     required=["doc_id", "body"],
                 ),

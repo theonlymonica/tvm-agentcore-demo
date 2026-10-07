@@ -10,21 +10,50 @@ interceptor-set header that the target allowlists arrives at the Lambda under
 
 Carrying them as headers instead buys two things the body could not:
 
-1. **The credential is off the tool contract.** The tool's ``inputSchema`` now
-   declares only the model-supplied arguments, so the credential is not a field
-   the model can see, name, echo or be persuaded to pass. AWS makes exactly this
-   argument for propagating an identity token by header rather than by tool
-   parameter: "If you put the id_token in the tool schema instead, the FM becomes
-   responsible for passing it, which means the token lands in prompts, traces,
-   memory, and logs."
+1. **Nothing credential-shaped is in the request body at all.** This is the
+   measured gain, and it is narrower than it first looks. The old design did NOT
+   put the credential in the tool contract: it rode as an UNDECLARED
+   ``params.arguments`` field, kept out of every ``inputSchema`` precisely so the
+   model never saw a credential-shaped property (``cdk/gateway_resources.py``
+   declares only ``doc_id`` / ``query`` / ``body``, and never declared
+   ``context``). So "the credential left the tool contract" is NOT what changed —
+   it was never there.
+
+   What changed is that the credential is no longer in the BODY, and the body is
+   what the Gateway's vended ``APPLICATION_LOGS`` copy verbatim into CloudWatch
+   through their ``requestBody`` field. With the credential in the body, enabling
+   that delivery wrote a live secret key into a log group — observed, not
+   theorised. With the credential on a header, the same records were re-measured
+   with the real credentials in flight and carry no header name and no header
+   value. A second, smaller gain: nothing is written into ``params`` /
+   ``arguments`` at all, so the forwarded body is deep-equal to the one the
+   Gateway received, which is a property a test can assert rather than a
+   convention to remember.
+
+   AWS makes a related argument for propagating an identity token by header
+   rather than by tool parameter — "If you put the id_token in the tool schema
+   instead, the FM becomes responsible for passing it, which means the token
+   lands in prompts, traces, memory, and logs." It describes a failure mode this
+   design never had, since the field was undeclared; it is cited here as the
+   general case, not as the defect this change fixed.
    https://aws.amazon.com/blogs/security/identity-aware-ai-data-agents-with-aws-lake-formation-and-trusted-identity-propagation/
 
-2. **A client-supplied value cannot win.** The Gateway merges interceptor headers
-   with the target's ``metadataConfiguration.allowedRequestHeaders`` allowlist,
-   and an interceptor-provided value takes PRECEDENCE over a client-provided one.
-   A header absent from the allowlist is dropped outright. The interceptor sets
-   all four of these on every scoped call, so a hostile client that sends its own
+2. **A client-supplied value cannot win — ON A CALL THE INTERCEPTOR HANDLES.**
+   The Gateway merges interceptor headers with the target's
+   ``metadataConfiguration.allowedRequestHeaders`` allowlist, and an
+   interceptor-provided value takes PRECEDENCE over a client-provided one. A
+   header absent from the allowlist is dropped outright. The interceptor sets all
+   four on every scoped call, so a hostile client that sends its own
    ``x-tvm-served-scope`` is overwritten rather than honoured.
+
+   The qualifier is load-bearing: precedence only applies to a header the
+   interceptor actually WRITES. On a path where it writes none, a client-supplied
+   value for an allowlisted name is the only value present and would propagate.
+   That is why an unclassifiable ``tools/call`` now FAILS CLOSED instead of
+   passing through (``interceptor/handler.py``, asserted by
+   ``tests/test_unclassifiable_tools_call_fails_closed.py``) — the allowlist is on
+   all three targets, so a pass-through is no longer the harmless thing it was
+   when the credentials rode in the body.
    https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-headers.html
 
 What this module deliberately does NOT do

@@ -122,8 +122,11 @@ def _arguments_for_record(arguments: dict[str, Any]) -> dict[str, Any]:
     """Copy the model-supplied arguments, dropping the excluded key.
 
     Args:
-        arguments: The arguments exactly as the model supplied them, BEFORE the
-            interceptor writes its ``context`` object.
+        arguments: The arguments exactly as the model supplied them. The
+            interceptor no longer writes anything into them — the credentials
+            travel as propagated headers — so these are the model's arguments
+            whole. The excluded key is still dropped: see
+            ``_EXCLUDED_ARGUMENT_KEY`` for why.
 
     Returns:
         A new dict safe to serialize. The input is never mutated.
