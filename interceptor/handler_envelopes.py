@@ -1,10 +1,10 @@
 """REQUEST-interceptor output envelope builders.
 
-Extracted from ``interceptor/handler.py``, which had reached the repository's
-400-line hard limit (``.kiro/steering/code-modularity.md``). These two functions form
+Extracted from ``interceptor/handler.py``, which had reached this repository's
+400-line per-module limit. These two functions form
 a natural boundary: they know the Gateway's wire contract and nothing about scopes,
 identity, or credentials, so they are the part of the handler that can be read and
-tested without any of its security reasoning.
+reviewed without any of its security reasoning.
 
 Which envelope is returned is the allow/deny decision itself:
 

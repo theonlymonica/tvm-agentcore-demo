@@ -1,7 +1,8 @@
 # The audit map
 
 _Per question: where the answer is stored, which field holds it, and which key joins
-that record to its neighbours. Identifiers are placeholders per `notes/README.md`._
+that record to its neighbours. Account ids, gateway ids and ARNs below are
+placeholders — substitute the real values from the stack outputs before use._
 
 This is a map, not an archive. Almost nothing here is written by us: the point of the
 three work items was to make records AWS already writes **joinable**, by putting the

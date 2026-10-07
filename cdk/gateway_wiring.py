@@ -85,9 +85,18 @@ def enable_gateway_tracing(
     # tenant — into
     # /aws/vendedlogs/bedrock-agentcore/gateway/APPLICATION_LOGS/{gateway_id}.
     # Where documents can hold attacker-supplied text, that text is copied there
-    # too, and so is whatever a successful injection exfiltrates, since that
-    # returns through the gateway as a tool result. Observed with the delivery
-    # temporarily enabled out of band, not reasoned about.
+    # too. What a successful injection writes back out lands in the records as
+    # well, but in a DIFFERENT field: the agent sends it as a `reply` tool call,
+    # so it arrives in that call's `requestBody` (params.arguments.body), while
+    # `responseBody` holds what the agent READ. Reconstructing such a sequence
+    # means reading both fields. Observed with the delivery temporarily enabled
+    # out of band, not reasoned about.
+    #
+    # Bounded by the request path, which still isolates: a cross-scope read
+    # FAILS, so these records can only hold data from the caller's own scope.
+    # What the log removes is the partition on the READING side — one log group
+    # per gateway, no per-scope partition, and `logs:FilterLogEvents` on that
+    # group is a single unpartitioned permission that returns all of it.
     #
     # The records carry no credential: the same capture ran with the real vended
     # credentials in flight and contained ZERO header names and ZERO header

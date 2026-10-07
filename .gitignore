@@ -100,7 +100,7 @@ Thumbs.db
 # ---------------------------------------------------------------------------
 # `evidence/` holds unredacted output captured straight from an account: real
 # account id, gateway id, Cognito pool / app-client ids, Cognito `sub`, IAM identity
-# ARNs and deploy logs. notes/README.md commits the project to placeholder
-# identifiers only, so the raw form stays local and the REDACTED transcript is what
-# gets committed, under notes/.
+# ARNs and deploy logs. Committed files carry PLACEHOLDER identifiers only, so the
+# raw form stays local and the REDACTED transcript is what gets committed, under
+# notes/.
 evidence/

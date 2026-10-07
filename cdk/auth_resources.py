@@ -18,9 +18,9 @@ Managed rather than imported:
     The pool and the app client are managed constructs, not resources imported
     by literal id. That keeps the whole auth posture — MFA, password policy,
     token validity, threat-protection tier, ``PreventUserExistenceErrors``,
-    self-signup — defined in this file, visible to CloudFormation and to the
-    test suite, and removed again by ``cdk destroy``. Two consequences, accepted
-    deliberately:
+    self-signup — defined in this file, visible to CloudFormation and in the
+    synthesized template, and removed again by ``cdk destroy``. Two
+    consequences, accepted deliberately:
 
     - The pool id / app client id are DEPLOY-TIME values (CloudFormation
       tokens), NOT literals. Every consumer takes them from the

@@ -11,7 +11,7 @@
 --                                  who (sourceIdentity), what was touched, and the
 --                                  AgentCore invocation.
 --
--- Identifiers below are placeholders per notes/README.md. Substitute before running:
+-- Identifiers below are PLACEHOLDERS. Substitute before running:
 --   <TRAIL_BUCKET>   the audit trail's bucket name (stack output)
 --   <ACCOUNT_ID>     the AWS account id
 --   <REGION>         the region the stack is deployed in, e.g. us-east-1
@@ -51,8 +51,8 @@
 --      https://aws.amazon.com/cloudtrail/pricing/
 --
 -- The facts these queries are meant to return WERE verified, by reading the trail's
--- gzipped objects directly — see notes/wi1-source-identity.md. What is unverified is
--- this SQL path to them, not the evidence.
+-- gzipped objects directly. What is unverified is this SQL path to them, not the
+-- evidence.
 --
 -- Partition projection rather than ALTER TABLE ADD PARTITION: CloudTrail writes a
 -- new prefix every day, so a manually partitioned table silently stops covering

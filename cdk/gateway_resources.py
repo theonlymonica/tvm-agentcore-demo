@@ -113,9 +113,9 @@ def create_gateway(
             points — _build_interceptor_configs (creation) here AND
             attach_policy_engine's UpdateGateway payload — so the two
             declarations can never diverge and UpdateGateway can never silently
-            drop it. When None, only the REQUEST interceptor is wired (the
-            existing test_synth_config.py call site calls create_gateway without
-            it and must keep working).
+            drop it. Optional so that a gateway can be stood up with the REQUEST
+            interceptor alone; when None, no RESPONSE interceptor is declared at
+            either point.
         tool_fns: Optional dict mapping tool names to their Lambda fns.
 
     Returns:
