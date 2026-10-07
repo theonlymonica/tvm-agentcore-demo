@@ -42,7 +42,7 @@ Usage
     python3 scripts/mint_demo_token.py --check              # assert invariants
     python3 scripts/mint_demo_token.py --username other-user
 
-Requires ``pycognito`` (pinned in ``requirements-dev.txt``) and credentials for
+Requires ``pycognito`` (``pip install pycognito==2024.5.1``) and credentials for
 the account the stack is deployed in.
 
 Citation:
@@ -76,8 +76,7 @@ CLIENT_OUTPUT = "CognitoAppClientId"
 
 #: The scope groups the interceptor recognises. MUST stay in sync with
 #: ``cdk/auth_resources.py`` SCOPE_GROUPS and
-#: ``interceptor/jwt_claims._DEFAULT_KNOWN_SCOPES``;
-#: ``tests/test_known_scopes.py`` pins those two to each other.
+#: ``interceptor/jwt_claims._DEFAULT_KNOWN_SCOPES``.
 KNOWN_SCOPE_GROUPS = frozenset({"payments-core", "billing-internal"})
 
 
@@ -268,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(
             "pycognito is not installed. The app client is SRP-only and the AWS "
             "CLI cannot compute SRP_A, so this library is required:\n"
-            "    pip install -r requirements-dev.txt"
+            "    pip install pycognito==2024.5.1"
         ) from None
 
     pool_id, client_id = _resolve_ids(args.stack, args.region, args.profile)

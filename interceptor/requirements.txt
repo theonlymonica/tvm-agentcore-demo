@@ -11,8 +11,4 @@
 # the AWS Lambda Python base rather than a slim Debian one. `cryptography` itself
 # is transitive and still floats — pinning transitives needs a hash-locked
 # lockfile and a --require-hashes install, deliberately out of scope here.
-#
-# Kept at the same version as the PyJWT pin in requirements-dev.txt: the test
-# venv imports interceptor/jwt_claims.py, so a divergence would mean the suite
-# verifies a different PyJWT than the deployed Lambda runs.
 PyJWT[crypto]==2.13.0

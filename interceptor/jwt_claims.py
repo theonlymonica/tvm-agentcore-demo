@@ -9,7 +9,7 @@ invariant.
 Trust root — signature VERIFIED in the interceptor (defense in depth):
     The token is validated by the AgentCore Gateway ``CUSTOM_JWT`` inbound
     authorizer (signature, allowed clients) before the interceptor runs, but the
-    interceptor no longer trusts that upstream check alone. It verifies the token
+    interceptor does not trust that upstream check alone. It verifies the token
     ITSELF against the Cognito user pool JWKS — RS256 signature, issuer (``iss``),
     and expiry (``exp``) — using ``PyJWT`` (``jwt.PyJWKClient``) BEFORE reading any
     claim. Any verification failure fails closed (returns ``None``), exactly as a
@@ -108,9 +108,8 @@ _COGNITO_GROUPS_CLAIM = "cognito:groups"
 #: The ONLY JWS algorithm accepted. Cognito signs with RS256; pinning the list
 #: means the token header's ``alg`` never chooses the primitive, which is what
 #: blocks HS256 confusion (HMAC using the published JWKS public key as the
-#: "secret") and ``alg: none``. Kept as a named constant because a behavioural
-#: test cannot cover this decision on its own — see
-#: ``tests/test_interceptor_jwt_algorithm_pinning.py``.
+#: "secret") and ``alg: none``. Kept as a named constant so the decision is
+#: visible where a reviewer looks for it.
 _ALGORITHMS: list[str] = ["RS256"]
 
 #: Cognito's token-type claim and the ONE value this interceptor accepts. The ID
@@ -154,8 +153,7 @@ _ISSUER = os.environ.get("COGNITO_ISSUER", "").strip()
 _jwk_client: Optional[PyJWKClient] = None
 
 #: Known scope-group set for the single-scope-group invariant. MUST stay in
-#: sync with ``cdk/auth_resources.SCOPE_GROUPS`` (a drift test enforces
-#: this — see ``tests/test_known_scopes.py``). These are the Cognito GROUPS the
+#: sync with ``cdk/auth_resources.SCOPE_GROUPS``. These are the Cognito GROUPS the
 #: stack provisions in the managed pool (the scopes a user can be granted via
 #: group membership).
 #:
@@ -168,9 +166,8 @@ _jwk_client: Optional[PyJWKClient] = None
 #: ``served_scope``. That is a deliberate boundary. WARNING: creating a Cognito
 #: group named after a foreign partition (e.g. an ``infra-secrets`` group) would
 #: SILENTLY make that partition reachable — do not add foreign-partition names
-#: here or as Cognito groups. ``tests/test_known_scopes.py`` asserts
-#: ``infra-secrets`` / ``hr-data`` fail closed so the boundary is enforced by a
-#: test, not by the current group configuration.
+#: here or as Cognito groups. A name absent from this set fails CLOSED: the
+#: intersection is empty and no credential is vended.
 _DEFAULT_KNOWN_SCOPES: frozenset[str] = frozenset(
     {"payments-core", "billing-internal"}
 )

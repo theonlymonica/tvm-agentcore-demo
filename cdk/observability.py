@@ -13,8 +13,7 @@ Removing over-wide grants is precisely the point of this stack, so paying for
 retention with a new account-wide wildcard grant would be self-defeating. An
 explicit ``logs.LogGroup`` passed as ``log_group=`` sets the function's
 ``LoggingConfig.LogGroup`` directly: no custom resource, no extra Lambda, no
-wildcard, and ``RetentionInDays`` is visible in the synthesized template (so
-``tests/test_synth_operational_posture.py`` can assert it).
+wildcard, and ``RetentionInDays`` is visible in the synthesized template.
 
 The log group is created with ``RemovalPolicy.DESTROY`` so the groups go away on
 teardown; RETAIN would leave orphaned groups behind on every ``cdk destroy`` /
@@ -96,7 +95,7 @@ def lambda_log_group(
         function_name: The Lambda function name whose conventional log-group
             path (``/aws/lambda/<function_name>``) this group takes. For a
             function with an auto-generated physical name, pass the stable
-            ``toxic-flow-*`` label the group should carry instead.
+            label the group should carry instead.
         retention: Override for the default :data:`LAMBDA_LOG_RETENTION`. Pass
             :data:`AUDIT_LOG_RETENTION` for a group whose contents answer an audit
             question and therefore must outlive ordinary operational logs.

@@ -45,11 +45,11 @@ Removal rules (applied to a deep copy — the caller's value is never mutated):
 
 Depth bound (why this module RAISES rather than degrading):
     The traversal is recursive and ``copy.deepcopy`` recurses too, so a body nested
-    deeper than the interpreter's stack allows used to abort the scrub with
+    deeper than the interpreter's stack allows would abort the scrub with
     ``RecursionError`` PART-WAY THROUGH. There is no safe way to report that as a
-    value: a partially scrubbed body is indistinguishable from a clean one, and the
-    handler's blanket ``except`` turned it into a pass-through of the original
-    unscrubbed reply — the exception path doubled as a scrubber bypass. So
+    value: a partially scrubbed body is indistinguishable from a clean one, and a
+    blanket ``except`` in the handler would turn it into a pass-through of the
+    original unscrubbed reply — making the exception path a scrubber bypass. So
     :data:`_MAX_BODY_DEPTH` caps the nesting and :class:`DepthLimitExceeded` (a
     :class:`ScrubError`) is raised for anything past it, deterministically and
     before any copying. The budget spans the whole walk, including containers rule
@@ -60,15 +60,15 @@ Depth bound (why this module RAISES rather than degrading):
     fail-CLOSED: it withholds the reply.
 
 Why substrings and normalised names (the gap this closes):
-    Both rules used to be exact-match only: rule 2's regex was fully anchored
-    (``^...$``) and rule 1's key set was case-sensitive snake_case. A key ID
-    embedded in prose, a log line, a presigned URL or a JSON-encoded blob passed
-    straight through, as did the raw STS ``AssumeRole`` / ``GetSessionToken``
+    Exact matching is not enough. With rule 2's regex fully anchored
+    (``^...$``) and rule 1's key set case-sensitive snake_case, a key ID
+    embedded in prose, a log line, a presigned URL or a JSON-encoded blob would pass
+    straight through, as would the raw STS ``AssumeRole`` / ``GetSessionToken``
     reply shape (``AccessKeyId`` / ``SecretAccessKey`` / ``SessionToken``) and the
     boto3 ``Session`` keyword names (``aws_access_key_id`` / ...) that the tool
-    Lambdas actually build. A secret access key and a session token had no
-    value-shape rule at all, so under any non-listed key — or as free text — the
-    highest-value material had the weakest coverage.
+    Lambdas actually build. A secret access key and a session token have no
+    value-shape rule tied to a key name at all, so under any non-listed key — or as
+    free text — the highest-value material would have the weakest coverage.
 
 HEURISTIC / grounding note:
     AWS documents credential FIELD NAMES but publishes no authoritative, stable
@@ -145,11 +145,12 @@ from collections.abc import Iterator
 #     They are listed EXPLICITLY because `_normalise_key` strips separators but
 #     not the `x-tvm` prefix, so `x-tvm-session-token` normalises to
 #     `xtvmsessiontoken` and is NOT covered by the `session_token` entry;
-#   * the `context` object and its `tenant_credentials` child — the RETIRED
-#     request-body wire contract. Kept deliberately: the request body no longer
-#     carries them, but this scrubber guards the RESPONSE, whose shape is produced
-#     by the tool. A tool still free to build an object by those names is a tool
-#     whose output still has to be scrubbed;
+#   * `context` — a credential-shaped CONTAINER name a tool is free to build in
+#     its own response. This scrubber guards the RESPONSE, whose shape is
+#     produced by the tool rather than by the interceptor, so a name a tool could
+#     use for a credential object is a name whose output has to be scrubbed. The
+#     three credential FIELD names below are matched at any depth independently,
+#     so a credential nested under any other container is removed as well;
 #   * `credentials` — the STS `AssumeRole` / `GetSessionToken` reply member that
 #     carries the three fields;
 #   * access key id / secret access key / session token — the three fields, in
@@ -167,7 +168,6 @@ _CREDENTIAL_KEY_NAME_SPELLINGS: frozenset[str] = frozenset(
         "x-tvm-secret-access-key",
         "x-tvm-session-token",
         "context",
-        "tenant_credentials",
         "credentials",
         "access_key_id",
         "secret_access_key",
@@ -248,9 +248,7 @@ _SECRET_ACCESS_KEY_PATTERN = re.compile(
 #: predicts. The accepted cost is that a very long MIXED-CASE-plus-digits base64
 #: run in legitimate content — an embedded attachment, say — is excised too. Single
 #: case runs and hex are unaffected (see `_mixes_character_classes`), which covers
-#: ordinary document text; see the matching test in
-#: tests/test_response_interceptor_scrub_gaps.py, which pins this as intended
-#: behaviour rather than an accident.
+#: ordinary document text. That trade is intended, not an accident.
 _SESSION_TOKEN_PATTERN = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{300,}")
 
 #: SigV4 presigned-URL query parameters. These carry credential material inside a
@@ -275,7 +273,7 @@ _MAX_EMBEDDED_JSON_CHARS = 1_048_576
 #: Maximum number of nested containers the scrubber will traverse before refusing
 #: to vouch for the body. Both the traversal below AND `copy.deepcopy` recurse once
 #: per container, so without a cap a deeply nested body raises `RecursionError`
-#: PART-WAY THROUGH the scrub — and the handler's blanket `except` used to turn
+#: PART-WAY THROUGH the scrub — and a blanket `except` in the handler would turn
 #: that into a pass-through of the ORIGINAL body, making the exception path a
 #: silent scrubber bypass.
 #:
@@ -292,8 +290,8 @@ _MAX_EMBEDDED_JSON_CHARS = 1_048_576
 #: any reply this system produces: the deepest real shape is
 #: `result.content[].text` plus the payload decoded out of it, well under 10.
 #:
-#: The trade this accepts: a body nested 101..~500 deep used to scrub correctly and
-#: now gets withheld instead. Nothing hand-written reaches that, but generated JSON
+#: The trade this accepts: a body nested 101..~500 deep could be scrubbed correctly
+#: and is withheld instead. Nothing hand-written reaches that, but generated JSON
 #: (an XML->JSON conversion, a deep org tree) conceivably could, so the ceiling is
 #: a documented number to raise rather than a hidden one to discover.
 _MAX_BODY_DEPTH = 100

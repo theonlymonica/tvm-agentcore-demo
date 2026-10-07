@@ -78,8 +78,7 @@ def add_cedar_policies(
     before that target exists. This ordering was also a precondition for the
     abandoned ``FAIL_ON_ANY_FINDINGS`` attempt — see the ``validation_mode``
     comment in ``_create_cedar_policy`` for why that deploy-time check is gone.
-    There is NO deploy-time validation of the action string; the only check is at
-    synth, in ``tests/test_cedar_policy_actions.py``.
+    There is NO deploy-time validation of the action string.
 
     Args:
         scope: The CDK Stack or Construct to attach resources to.
@@ -218,12 +217,10 @@ def _create_cedar_policy(
         #
         # The guard FAIL_ON_ANY_FINDINGS was reached for — catching an action
         # string that resolves to no registered gateway target, which would
-        # silently deny the tool — is kept, and kept EARLIER: at synth, by
-        # tests/test_cedar_policy_actions.py::test_actions_match_the_gateway_targets,
-        # whose set comparison catches both an action naming no target and a
-        # target named by no action. Losing the deploy-time check is a real
-        # reduction in defence-in-depth; the enum leaves no way to keep both, and
-        # a check that runs before the deploy is the better half to keep.
+        # silently deny the tool — is NOT available in any other mode. Every
+        # action string here must name a registered gateway target, and the
+        # enum leaves no way to have the validator check that without also
+        # rejecting the deliberately unconstrained principal.
         #
         # Do NOT "fix" this by constraining `principal` to satisfy the validator:
         # that would restate the tenant boundary in a second place with no added

@@ -79,34 +79,25 @@ def enable_gateway_tracing(
     # DATA-IN-PAYLOAD GUARD — DO NOT enable gateway APPLICATION_LOGS
     # request-body delivery.
     #
-    # HISTORY — the original reason for this guard no longer holds. It was: the
-    # REQUEST interceptor vends short-lived STS credentials to the tools inside
-    # `params.arguments`, and the gateway's vended APPLICATION_LOGS carry a
-    # `requestBody` field that includes `params.arguments` VERBATIM
-    # (observability-gateway-metrics.html), so enabling the delivery wrote those
-    # credentials into
+    # The gateway's vended APPLICATION_LOGS carry a `responseBody` field holding
+    # the tool's full answer (observability-gateway-metrics.html). A successful
+    # read_document therefore writes the ENTIRE DOCUMENT — body, conversation,
+    # tenant — into
     # /aws/vendedlogs/bedrock-agentcore/gateway/APPLICATION_LOGS/{gateway_id}.
-    # That was demonstrated, not reasoned about.
+    # Where documents can hold attacker-supplied text, that text is copied there
+    # too, and so is whatever a successful injection exfiltrates, since that
+    # returns through the gateway as a tool result. Observed with the delivery
+    # temporarily enabled out of band, not reasoned about.
     #
-    # The credentials now travel as allowlisted PROPAGATED HEADERS and the body
-    # is forwarded deep-equal, so that capture path is closed. Measured, not
-    # assumed: with APPLICATION_LOGS temporarily enabled out of band and the real
-    # vended credentials in flight, the records contained ZERO header names and
-    # ZERO header values over seven legs covering THREE of the four record kinds
-    # the observability reference lists — start/completion (successful call,
-    # search, tools/list), incorrect request parameters (bad parameters, unknown
-    # tool), and missing/incorrect authorization headers, the last being the only
-    # kind the docs say touches headers at all. The fourth kind, "Error messages
-    # for Target configurations", is NOT measured: it would need a deliberately
+    # The records carry no credential: the same capture ran with the real vended
+    # credentials in flight and contained ZERO header names and ZERO header
+    # values over seven legs covering THREE of the four record kinds the
+    # observability reference lists — start/completion (successful call, search,
+    # tools/list), incorrect request parameters (bad parameters, unknown tool),
+    # and missing/incorrect authorization headers, the last being the only kind
+    # the docs say touches headers at all. The fourth kind, "Error messages for
+    # Target configurations", is NOT measured: it would need a deliberately
     # misconfigured target.
-    #
-    # THE PROHIBITION STANDS, FOR A DIFFERENT REASON. The same records showed what
-    # APPLICATION_LOGS does carry: a `responseBody` field holding the tool's full
-    # answer. A successful read_document therefore writes the ENTIRE DOCUMENT —
-    # body, conversation, tenant — into CloudWatch. Where documents can hold
-    # attacker-supplied text, that text is copied there too, and so is whatever a
-    # successful injection exfiltrates, since that returns through the gateway as
-    # a tool result.
     #
     # That is a boundary problem rather than untidiness. There is ONE log group
     # per gateway, every tenant's requests pass through that gateway, and the
@@ -118,17 +109,9 @@ def enable_gateway_tracing(
     # 60-second credential record lives, and a document does not expire.
     #
     # This module therefore delivers ONLY `TRACES` (below); vended spans do NOT
-    # include arguments. Two mechanical layers back the prohibition up, so it
-    # does not rest on this comment alone:
-    #
-    #   1. tests/test_synth_log_delivery.py asserts against the SYNTHESIZED
-    #      template that every PutDeliverySource declares logType=TRACES, that
-    #      exactly one source exists and targets this gateway, and that the
-    #      literal APPLICATION_LOGS appears nowhere. Adding an APPLICATION_LOGS
-    #      delivery here breaks the test suite.
-    #   2. The `logs:PutDeliverySource` grant below is pinned to the single
-    #      `source_name` delivery-source ARN, so this deploy-time role cannot
-    #      create an ADDITIONAL, differently-named APPLICATION_LOGS source.
+    # include arguments. The `logs:PutDeliverySource` grant below is pinned to the
+    # single `source_name` delivery-source ARN, so this deploy-time role cannot
+    # create an ADDITIONAL, differently-named APPLICATION_LOGS source.
     #
     # IAM cannot express the constraint directly: `logs:PutDeliverySource`
     # supports only tag condition keys plus `logs:LogGeneratingResourceArns`
@@ -167,8 +150,7 @@ def enable_gateway_tracing(
     logs_policy = cr.AwsCustomResourcePolicy.from_statements([
         # Creating/updating a delivery SOURCE is the credential-relevant action
         # (it is what carries `logType`), so it is pinned to the single frozen
-        # TRACES source rather than "*". Asserted by
-        # tests/test_synth_log_delivery.py::TestPutDeliverySourceIsPinned.
+        # TRACES source rather than "*".
         iam.PolicyStatement(
             actions=["logs:PutDeliverySource"],
             resources=[traces_source_arn],

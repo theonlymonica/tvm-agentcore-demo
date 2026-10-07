@@ -44,8 +44,8 @@ CloudTrail does not record, and should not.
 Not by scrubbing, which can rot, but structurally:
 
 - The interceptor's record is emitted **before** the vend, so no credential exists in
-  scope when it is built. The `context` key — the RETIRED request-body credential key,
-  which no tool declares or reads — is excluded, and every builder parameter
+  scope when it is built. The `context` key — a credential-shaped name no tool
+  declares or reads — is excluded, and every builder parameter
   is keyword-only so no unnamed value can be passed in.
 - CloudTrail redacts by itself: `InvokeAgentRuntime` shows
   `response: HIDDEN_DUE_TO_SECURITY_REASONS`, and `AssumeRole` never returns the keys.

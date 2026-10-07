@@ -40,15 +40,6 @@ version: 2
 updates:
   # --- Python -------------------------------------------------------------
 
-  # Test toolchain: requirements-dev.txt (pytest, hypothesis, moto, boto3, PyJWT).
-  - package-ecosystem: pip
-    directory: "/"
-    schedule:
-      interval: monthly
-    open-pull-requests-limit: 0
-    commit-message:
-      prefix: chore(deps)
-
   # CDK app: aws-cdk-lib, the AgentCore alpha construct library, constructs.
   - package-ecosystem: pip
     directory: "/cdk"

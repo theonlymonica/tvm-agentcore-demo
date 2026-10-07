@@ -129,8 +129,7 @@ def create_audit_trail(
         # What actually ships is the override: it REPLACES the EventSelectors array
         # with a single selector carrying `IncludeManagementEvents: False`. A trail
         # logs what its selectors say, so no management event is delivered by this
-        # trail regardless of this prop. tests/test_audit_trail_scope.py asserts that
-        # on the SYNTHESIZED template rather than trusting this comment.
+        # trail regardless of this prop.
         management_events=cloudtrail.ReadWriteType.ALL,
     )
 

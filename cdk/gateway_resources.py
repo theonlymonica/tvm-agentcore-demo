@@ -398,10 +398,7 @@ def _create_tool_targets(
                         # credentials reach the Lambda as PROPAGATED REQUEST
                         # HEADERS (allowlisted below), not in the request body,
                         # so they travel only forward and are never advertised
-                        # to the model in the published schema. This schema has
-                        # never declared them: under the earlier in-body design
-                        # they rode as an UNDECLARED arguments["context"] field
-                        # for the same reason.
+                        # to the model in the published schema.
                     },
                     required=["doc_id"],
                 ),
@@ -436,10 +433,7 @@ def _create_tool_targets(
                         # credentials reach the Lambda as PROPAGATED REQUEST
                         # HEADERS (allowlisted below), not in the request body,
                         # so they travel only forward and are never advertised
-                        # to the model in the published schema. This schema has
-                        # never declared them: under the earlier in-body design
-                        # they rode as an UNDECLARED arguments["context"] field
-                        # for the same reason.
+                        # to the model in the published schema.
                     },
                     required=["query"],
                 ),
@@ -483,10 +477,7 @@ def _create_tool_targets(
                         # reach the Lambda as PROPAGATED REQUEST HEADERS
                         # (allowlisted below), not in the request body, so they
                         # travel only forward and are never advertised to the
-                        # model in the published schema. This schema has never
-                        # declared them: under the earlier in-body design they
-                        # rode as an UNDECLARED arguments["context"] field for
-                        # the same reason.
+                        # model in the published schema.
                     },
                     required=["doc_id", "body"],
                 ),
@@ -497,8 +488,7 @@ def _create_tool_targets(
     # All THREE tool targets allowlist the credential headers, not just one: every
     # scoped tool is handed its own vended credentials, so a target left off this
     # list would have the Gateway drop them and that tool would fail closed on
-    # every call. tests/test_header_contract_parity.py asserts the synthesized
-    # template carries the allowlist on each of the three.
+    # every call.
     allowlist_credential_headers(read_document_target, "ReadDocumentTarget")
     allowlist_credential_headers(search_documents_target, "SearchDocumentsTarget")
     allowlist_credential_headers(reply_target, "ReplyTarget")

@@ -222,7 +222,7 @@ class ScopedCredentialsStack(cdk.Stack):
         table_name = data.documents_table.table_name
 
         # -- read_document Lambda (uses interceptor-vended creds) --
-        # No role ARN / table ARN env: the tool no longer assumes a role. It only
+        # No role ARN / table ARN env: the tool assumes no role. It only
         # needs the table NAME to bind the boto3 Table to the vended credentials.
         self.read_document_fn = lambda_.Function(
             self,
@@ -316,8 +316,8 @@ class ScopedCredentialsStack(cdk.Stack):
         # -- REQUEST interceptor Lambda (CONTAINER IMAGE) --
         # The interceptor VERIFIES the JWT
         # signature (RS256 against the Cognito pool JWKS), issuer, and expiry in
-        # `interceptor/jwt_claims.py` BEFORE deriving served_scope — it no longer
-        # trusts the gateway CUSTOM_JWT check alone (defense in depth). That
+        # `interceptor/jwt_claims.py` BEFORE deriving served_scope — it does not
+        # trust the gateway CUSTOM_JWT check alone (defense in depth). That
         # verification needs `cryptography` (via PyJWT[crypto]), a native binary a
         # zip asset cannot bundle, so the interceptor is packaged as a
         # container-image Lambda built on `public.ecr.aws/lambda/python:3.14`

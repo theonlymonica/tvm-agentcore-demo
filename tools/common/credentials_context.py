@@ -19,16 +19,11 @@ whole of its contract.
 
 Why these readers do not take the event
 ---------------------------------------
-This module previously read ``event["context"]["tenant_credentials"]``. Those
-readers are GONE rather than kept as a fallback, and the functions here do not
-accept an ``event`` parameter at all. That is deliberate: a reader that can still
+The functions here do not accept an ``event`` parameter at all. A reader that can
 find a credential in the body is a path, even when nothing is supposed to use it,
 and a tool that accepts a body-supplied credential accepts one the MODEL could
-have written. Removing the parameter makes "the credential cannot come from the
-body" a property of the signature instead of a rule someone has to keep.
-
-``tests/test_no_body_credential_path.py`` pins this by scanning the tool sources:
-no module may name the retired ``tenant_credentials`` key.
+have written. Leaving the parameter out makes "the credential cannot come from
+the body" a property of the signature instead of a rule someone has to keep.
 
 Why the lookup is case-insensitive
 ----------------------------------
@@ -88,8 +83,7 @@ from typing import Any
 PROPAGATED_HEADERS_KEY = "bedrockAgentCorePropagatedHeaders"
 
 #: Header carrying the authoritative, JWT-derived scope. MUST stay in sync with
-#: ``interceptor/credential_headers.py``; tests/test_header_contract_parity.py
-#: pins the two sides to each other.
+#: ``interceptor/credential_headers.py``.
 SERVED_SCOPE_HEADER = "x-tvm-served-scope"
 
 #: Mapping of the three credential headers onto the boto3 ``Session`` keyword

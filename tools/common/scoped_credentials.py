@@ -58,18 +58,21 @@ Environment variables (tool side):
     interceptor, which does the assume.)
 
 Security:
-    This module NEVER logs the event-supplied credentials.
+    This module NEVER logs the vended credentials it reads from the propagated
+    request headers.
 
 AWS documentation references:
     - STS session policy — the vended session is the INTERSECTION of the role
       identity policy and the inline session policy:
       https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_control-access_assumerole.html
     - STS ``Credentials`` shape (AccessKeyId, SecretAccessKey, SessionToken) —
-      the source field names the interceptor maps into ``tenant_credentials``:
+      the source field names the interceptor propagates as the three credential
+      headers (``x-tvm-access-key-id``, ``x-tvm-secret-access-key``,
+      ``x-tvm-session-token``):
       https://docs.aws.amazon.com/STS/latest/APIReference/API_Credentials.html
     - boto3/AWS credential field names (``aws_access_key_id``,
-      ``aws_secret_access_key``, ``aws_session_token``) that the three
-      ``tenant_credentials`` snake_case fields map onto for a session:
+      ``aws_secret_access_key``, ``aws_session_token``) that those three header
+      values map onto for a session:
       https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/credentials.html
     - DynamoDB ``dynamodb:LeadingKeys`` (partition key; MUST use ``ForAllValues``;
       ``Null`` presence-check hardening):
@@ -252,8 +255,7 @@ def documents_table_from_context(lambda_context: Any) -> Any:
     # silently fall back to the DEFAULT CREDENTIAL CHAIN (the tool's execution
     # role) instead of failing. The read would still be denied, because that role
     # holds no DynamoDB grant, but it would surface as an opaque AccessDenied
-    # rather than a clear contract violation. Enforced by
-    # tests/test_tool_session_factory.py.
+    # rather than a clear contract violation.
     return (
         _factory_session()
         .resource("dynamodb", **session_kwargs)

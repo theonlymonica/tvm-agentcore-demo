@@ -247,9 +247,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         #     something after it failed. The reply is safe and already computed.
         #   * scrub_started -> FAIL CLOSED. The scrubber raised (an over-deep body,
         #     or any unforeseen defect), so the reply is unvouched-for and MAY hold
-        #     credential material. Echoing it is exactly the bypass this branch
-        #     used to be: the only credential control on the response path,
-        #     defeated by making it throw. Withhold the body and return a
+        #     credential material. Echoing it would make this branch the bypass:
+        #     the scrubber is the only credential control on the response path, and
+        #     a branch that echoes on failure defeats it by making it throw.
+        #     Withhold the body and return a
         #     JSON-RPC error instead. This cannot break the MCP handshake:
         #     initialize / tools/list / ping replies either exit above via the
         #     method gate or are small flat structures with nothing for the
@@ -260,9 +261,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         #     is still the `{}` default; there is nothing to withhold, and echoing
         #     it keeps the no-op contract for a malformed envelope.
         #
-        # Either way the log stays count-only and detail-free — but it now carries
-        # `error=1`, so a scrub that failed is no longer indistinguishable in
-        # CloudWatch from a body that was genuinely clean.
+        # Either way the log stays count-only and detail-free — and it carries
+        # `error=1`, so a scrub that failed is distinguishable in CloudWatch from a
+        # body that was genuinely clean.
         if vouched_body is not _UNSET:
             _log("response_scrub error=1 stage=post_scrub withheld=0 removed=%d", 0)
             return _transformed_response(status_code, vouched_body)

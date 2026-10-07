@@ -130,8 +130,8 @@ WRITE_ACTIONS = ["dynamodb:UpdateItem"]
 #: the interceptor passes the tag under this key on ``AssumeRole`` and the
 #: identity policies below resolve it as ``${aws:PrincipalTag/<key>}``. The two
 #: literals live in different bundles (the interceptor Lambda asset excludes
-#: ``cdk/``) so they cannot share a constant; ``tests/test_scope_tag_abac.py``
-#: pins the equality instead. A mismatch fails CLOSED — the ``Null`` presence
+#: ``cdk/``) so they cannot share a constant and must be kept equal by hand. A
+#: mismatch fails CLOSED — the ``Null`` presence
 #: guard below denies every request rather than widening access.
 SCOPE_TAG_KEY = "scope"
 

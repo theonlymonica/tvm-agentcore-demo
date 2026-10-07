@@ -11,7 +11,12 @@ SSM, and tracks NO session state — enforcement is unconditional and structural
 Behavior:
 - Non-``tools/call`` protocol messages (initialize, tools/list,
   notifications/initialized, ping, ...): pass through UNCHANGED.
-- ``tools/call`` for a tool OUTSIDE the scoped set: pass through UNCHANGED.
+- ``tools/call`` for a tool the classifier does not know: FAIL CLOSED. Every
+  Lambda target allowlists the ``x-tvm-*`` header names, and the interceptor's
+  precedence over a client-supplied header only applies to a header it actually
+  writes — so forwarding such a call would let the CALLER's own
+  ``x-tvm-*`` header be the only value present for an allowlisted name.
+  Refusing makes that unreachable by construction.
 - ``tools/call`` for a scoped tool (``read_document``, ``search_documents``,
   ``reply``): derive ``served_scope`` from the validated Authorization JWT, vend
   scoped credentials, and propagate BOTH as custom request HEADERS in
@@ -186,9 +191,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     # Reach the request body through the defensive `.get()` chain (never a direct
     # subscript: a KeyError would surface as a Lambda exception -> Gateway 5xx),
     # then `copy.deepcopy` it. Nothing is written into `params` / `arguments` at
-    # all any more — the credentials travel as headers — so the forwarded body is
-    # deep-equal to the one the Gateway sent. The deepcopy is retained as the
-    # structural guarantee of that: it makes an accidental write land on a copy
+    # all — the credentials travel as headers — so the forwarded body is
+    # deep-equal to the one the Gateway sent. The deepcopy is the structural
+    # guarantee of that: it makes an accidental write land on a copy
     # instead of on the caller's object graph, so the property holds by
     # construction rather than by everyone remembering not to write.
     body = copy.deepcopy(gateway_request.get("body", {}) or {})
@@ -216,20 +221,17 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     # --- tools/call the interceptor cannot classify -> FAIL CLOSED ------------
     # `classify_tool` returns one of the three scoped tools or UNCLASSIFIABLE, so
-    # this branch IS the unclassifiable one, and its contract says the caller
-    # fails closed. It used to pass the body through, which was harmless while the
-    # credentials rode in the body: pass-through added nothing, so there was
-    # nothing to leak.
+    # this branch IS the unclassifiable one.
     #
-    # THE HEADER CHANNEL CHANGED THAT. Every Lambda target now allowlists the four
-    # `x-tvm-*` names in `metadataConfiguration.allowedRequestHeaders`, and the
-    # interceptor's precedence over a client-supplied header only applies to a
-    # header the interceptor actually WRITES. On a pass-through it writes none, so
-    # an `x-tvm-session-token` sent by the CLIENT — which, in this architecture, is
-    # the agent, the component assumed hostile — would be the only value present
-    # for an allowlisted name and would propagate to the Lambda. The tool-side
-    # reader would then be handed a credential chosen by the caller rather than
-    # vended for it.
+    # Every Lambda target allowlists the four `x-tvm-*` names in
+    # `metadataConfiguration.allowedRequestHeaders`, and the interceptor's
+    # precedence over a client-supplied header only applies to a header the
+    # interceptor actually WRITES. Forwarding a call it does not handle writes
+    # none, so an `x-tvm-session-token` sent by the CLIENT — which, in this
+    # architecture, is the agent, the component assumed hostile — would be the
+    # only value present for an allowlisted name and would propagate to the
+    # Lambda. The tool-side reader would then be handed a credential chosen by
+    # the caller rather than vended for it.
     #
     # Today the Gateway resolves the tool name to a target before any Lambda is
     # involved and answers `-32602 Unknown tool` for a name it cannot route, so
@@ -237,8 +239,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     # VERIFIED, it is the Gateway's behaviour rather than this component's, and it
     # would stop holding the moment a routable target is added that this
     # classifier does not know. Refusing here makes the path unreachable by
-    # construction instead of by someone else's routing. Asserted by
-    # tests/test_unclassifiable_tools_call_fails_closed.py.
+    # construction instead of by someone else's routing.
     if tool not in _SCOPED_TOOLS:
         logger.info("Unclassifiable tools/call; failing closed")
         return _short_circuit_error(body.get("id"), _GENERIC_ERROR_MESSAGE)

@@ -24,18 +24,10 @@ Credential channel (Lambda targets): propagated request HEADERS
     tool reads them from
     ``context.client_context.custom["bedrockAgentCorePropagatedHeaders"]``. The
     forwarded body is deep-equal to the one the gateway received, so nothing is
-    written into ``params`` / ``arguments`` at all, and the tool-side readers do
-    not accept the ``event`` — a credential in the body is no longer expressible.
-    See ``interceptor/credential_headers.py`` and
+    written into ``params`` / ``arguments`` at all, and the tool-side readers take
+    the Lambda CONTEXT rather than the event — a credential in the body is not
+    expressible. See ``interceptor/credential_headers.py`` and
     ``tools/common/credentials_context.py``.
-
-    THIS REPLACES an earlier design in which the credentials rode as undeclared
-    ``params.arguments`` fields, on the belief that a Lambda target had no header
-    channel. That belief was wrong: header propagation to a Lambda target is
-    documented and works, and the documentation describing it predates the
-    decision that avoided it. The cost of the old design was real — the gateway's
-    vended APPLICATION_LOGS copy ``requestBody`` verbatim, so enabling that
-    delivery wrote live credential values into CloudWatch.
 
     The header channel has its own constraints, enforced rather than assumed:
     at most 10 allowlisted headers per target (four are used), header names
@@ -44,12 +36,12 @@ Credential channel (Lambda targets): propagated request HEADERS
     credential would reach the tool as an opaque ``AccessDenied``. Measured in
     this system, the session token is the largest value at roughly 1.2 KB.
 
-    APPLICATION_LOGS delivery is still forbidden (see ``cdk/gateway_wiring.py``
-    and ``tests/test_synth_log_delivery.py``), but no longer because of
-    credentials: those records were re-measured with the real credentials in
-    flight and carry no header name and no header value. They carry the
-    ``responseBody``, which is the tool's full answer — the whole document for a
-    read — into a log group that has one partition for the entire gateway.
+    APPLICATION_LOGS delivery is forbidden (see ``cdk/gateway_wiring.py``).
+    Those records carry no header name and
+    no header value — measured with real vended credentials in flight — but they
+    do carry the ``responseBody``, which is the tool's full answer, the whole
+    document for a read, into a log group that has one partition for the entire
+    gateway.
 
 Security:
     This module NEVER logs the vended credentials or the Authorization header.
@@ -169,7 +161,7 @@ WRITE_ACTIONS: list[str] = ["dynamodb:UpdateItem"]
 #: Session-tag key carrying the authoritative served scope. MUST stay equal to
 #: ``SCOPE_TAG_KEY`` in ``cdk/documents_roles.py`` (the two live in different
 #: bundles — the interceptor asset excludes ``cdk/`` — so they cannot share one
-#: constant; ``tests/test_scope_tag_abac.py`` pins the equality).
+#: constant and must be kept equal by hand).
 SCOPE_TAG_KEY = "scope"
 
 #: IAM wildcard characters. The identity-policy condition must use
@@ -658,10 +650,11 @@ def vend_scoped_credentials(
         DurationSeconds=_SESSION_DURATION_SECONDS,
     )
     # Map the STS Credentials response into EXACTLY the three snake_case fields
-    # that ride in `tenant_credentials`: AccessKeyId ->
-    # access_key_id, SecretAccessKey -> secret_access_key, SessionToken ->
-    # session_token. `Expiration` and every other response key are excluded from
-    # the vended credentials the tool receives. STS `Credentials` response shape
+    # that `interceptor/credential_headers.py` propagates as the three credential
+    # headers: AccessKeyId -> access_key_id, SecretAccessKey ->
+    # secret_access_key, SessionToken -> session_token. `Expiration` and every
+    # other response key are excluded from the vended credentials the tool
+    # receives. STS `Credentials` response shape
     # (AccessKeyId, SecretAccessKey, SessionToken, Expiration) per the AWS
     # documentation:
     # https://docs.aws.amazon.com/STS/latest/APIReference/API_Credentials.html
@@ -671,11 +664,3 @@ def vend_scoped_credentials(
         "secret_access_key": raw["SecretAccessKey"],
         "session_token": raw["SessionToken"],
     }
-
-# `build_tenant_context` used to live here. It assembled the `context` object the
-# interceptor wrote into `arguments["context"]`, and it is DELETED rather than kept
-# unused: a helper that still knows how to package credentials into a request-body
-# object is a path back to the body, and the point of the header channel is that
-# no such path exists. `tests/test_no_body_credential_path.py` asserts that no
-# module names it. The credentials are packaged by
-# `interceptor/credential_headers.build_credential_headers` instead.

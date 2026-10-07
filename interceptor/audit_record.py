@@ -35,23 +35,12 @@ Two consequences worth knowing:
 WHAT IS DELIBERATELY EXCLUDED.
 
 The model-supplied ``context`` key is dropped before the arguments are recorded.
-
-NOTE — the ORIGINAL two reasons no longer hold, and are recorded here so nobody
-re-derives them. They were: (1) the handler overwrote any value at
-``arguments["context"]`` WITHOUT READING IT, so recording it would break that
-promise; and (2) ``context`` was the exact key that carried ``tenant_credentials``
-in the ENRICHED body. Neither is true now: the credentials travel as propagated
-request headers and the body is forwarded unchanged, so the interceptor writes
-nothing into ``arguments`` at all.
-
-The exclusion is KEPT on a different and still-valid argument. No tool declares
-``context`` in its ``inputSchema`` and no tool reads it, so a value arriving there
-is model-supplied noise that cannot affect what the tool does — dropping it loses
-nothing causally relevant to the request. And because it is the RETIRED credential
-key, keeping it out means this log line cannot carry a credential-shaped object
-even if a future change moved the emit call or put a credential back in the body.
-Every argument a tool actually acts on (``doc_id`` / ``query`` / ``body``) IS
-recorded.
+No tool declares ``context`` in its ``inputSchema`` and no tool reads it, so a
+value arriving there is model-supplied noise that cannot affect what the tool
+does — dropping it loses nothing causally relevant to the request. It is also a
+credential-shaped name, so keeping it out means this log line cannot carry a
+credential-shaped object even if a future change moved the emit call. Every
+argument a tool actually acts on (``doc_id`` / ``query`` / ``body``) IS recorded.
 
 Functions:
     build_audit_record: Assemble the record from the pre-vend facts.
@@ -123,10 +112,9 @@ def _arguments_for_record(arguments: dict[str, Any]) -> dict[str, Any]:
 
     Args:
         arguments: The arguments exactly as the model supplied them. The
-            interceptor no longer writes anything into them — the credentials
-            travel as propagated headers — so these are the model's arguments
-            whole. The excluded key is still dropped: see
-            ``_EXCLUDED_ARGUMENT_KEY`` for why.
+            interceptor writes nothing into them — the credentials travel as
+            propagated headers — so these are the model's arguments whole. The
+            excluded key is dropped: see ``_EXCLUDED_ARGUMENT_KEY`` for why.
 
     Returns:
         A new dict safe to serialize. The input is never mutated.

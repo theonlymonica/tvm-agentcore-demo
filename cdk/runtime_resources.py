@@ -306,8 +306,8 @@ def create_runtime(
     # AgentRuntimeArtifact.from_asset builds from a local Docker context.
     # The Dockerfile already targets linux/arm64.
     #
-    # exclude=: the asset hash fingerprints the whole staged context, so a
-    # local pytest run writing agent/__pycache__ moved the ECR tag. See
+    # exclude=: the asset hash fingerprints the whole staged context, so a stray
+    # agent/__pycache__ would move the ECR tag. See
     # cdk/asset_packaging.py for why not an agent/.dockerignore.
     agent_runtime_artifact = agentcore.AgentRuntimeArtifact.from_asset(
         agent_dir,
@@ -354,7 +354,7 @@ def create_runtime(
     # Grant the runtime's execution role permission to invoke EXACTLY the one
     # configured Bedrock model — nothing else. The agent has no per-invocation
     # model override (the model comes solely from bedrock_model_id / the
-    # BEDROCK_MODEL_ID env var), so the grant no longer needs to cover every
+    # BEDROCK_MODEL_ID env var), so the grant does not need to cover every
     # foundation model and every inference profile in the account.
     #
     # For a cross-Region inference profile id this yields two statements: the

@@ -33,7 +33,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy agent source files. Every .py in agent/ must be listed here -- a module
 # that main.py imports but the image does not carry fails at container start.
-# tests/test_agent_request_limits.py asserts this list stays complete.
 COPY main.py ./
 COPY agent_core.py ./
 COPY request_limits.py ./
@@ -66,12 +65,10 @@ USER 10001:10001
 # Expose the port expected by AgentCore Runtime
 EXPOSE 8080
 
-# No HEALTHCHECK — but the blocker is gone, so this is now a choice rather than
-# a constraint. /invocations used to run the agent synchronously on the event
-# loop, so GET /ping could not be served while an invocation was in flight and a
-# probe would have reported a busy container as unhealthy. main.py
-# now offloads the run with asyncio.to_thread, so /ping stays answerable
-# throughout. A HEALTHCHECK is therefore safe to add whenever it earns its keep;
+# No HEALTHCHECK — a choice rather than a constraint. main.py offloads the agent
+# run with asyncio.to_thread, so GET /ping stays answerable while an invocation
+# is in flight and a probe would not report a busy container as unhealthy.
+# A HEALTHCHECK is therefore safe to add whenever it earns its keep;
 # it is left out here because AgentCore Runtime polls /ping over its own service
 # contract and ignores Docker health status, so it would only serve plain
 # `docker run` / Compose / ECS deployments of this image.

@@ -4,8 +4,7 @@ This module is the CDK home for the Cognito identity layer the gateway
 ``CUSTOM_JWT`` authorizer and the interceptor's in-Lambda JWT verification
 consume. Everything here is **MANAGED** by this stack: the user pool, the app
 client, and the scope groups are created, updated and destroyed by
-CloudFormation, so the security floor of the identity layer is expressed in code
-and asserted by ``tests/test_auth_resources.py``.
+CloudFormation, so the security floor of the identity layer is expressed in code.
 
 Claim mechanism:
     ``served_scope`` is carried by ONE Cognito group per scope, emitted in the
@@ -49,8 +48,7 @@ Operational consequence of SRP-only (read before running any probe script):
     ``ADMIN_USER_PASSWORD_AUTH`` still sends the password to Cognito, but only
     over an IAM-authenticated admin API call, so it is not reachable by an
     anonymous attacker the way the public ``USER_PASSWORD_AUTH`` flow is. That
-    is a deliberate posture change: flip the flag, update the forbidden-flow set
-    in ``tests/test_auth_resources.py``, and say so in the commit.
+    is a deliberate posture change: flip the flag and say so in the commit.
 
 Auth posture expressed in code:
     - ``ALLOW_USER_SRP_AUTH`` only — ``USER_PASSWORD_AUTH`` and
@@ -102,9 +100,7 @@ from constructs import Construct
 # Managed-resource naming and posture constants.
 #
 # These are the knobs the security posture of the identity layer is made of.
-# They live at module level so ``tests/test_auth_resources.py`` can assert the
-# synthesized template against them (drift becomes a test failure, not a
-# surprise in the console).
+# They live at module level so the synthesized template can be read against them.
 # ---------------------------------------------------------------------------
 
 #: Name of the managed user pool (the id is assigned by Cognito at deploy time).
@@ -116,8 +112,8 @@ APP_CLIENT_NAME = "scoped-credentials-client"
 #: Scope groups created in the pool. ONE Cognito group per scope, carried in the
 #: standard ``cognito:groups`` claim. This is the "known scope set" the
 #: interceptor intersects ``cognito:groups`` against under the
-#: single-scope-group invariant. ``tests/test_known_scopes.py`` enforces that
-#: ``interceptor/jwt_claims._DEFAULT_KNOWN_SCOPES`` equals this tuple.
+#: single-scope-group invariant. It must equal
+#: ``interceptor/jwt_claims._DEFAULT_KNOWN_SCOPES``.
 SCOPE_GROUPS = ("payments-core", "billing-internal")
 
 #: The group a demo/operator user must belong to (exactly one scope group) for

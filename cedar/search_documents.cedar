@@ -23,7 +23,7 @@
 //
 // The action string below is the gateway's composite tool name
 // ({targetName}___{toolName}) and MUST match a registered gateway target. That
-// is checked ONCE, at synth, by tests/test_cedar_policy_actions.py. The Policy
+// is not checked at deploy time. The Policy
 // Engine does NOT check it at deploy time: FAIL_ON_ANY_FINDINGS would also
 // reject the deliberately unconstrained principal above, so no deploy carrying
 // these policies could succeed — see the comment on validation_mode in

@@ -125,12 +125,10 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 # ---------------------------------------------------------------------------
-# Bounded write (unbounded-append fix)
+# Bounded write
 # ---------------------------------------------------------------------------
-# ``body`` was previously only checked non-empty and then appended with
-# ``list_append``, with no bound on either the entry size or the resulting list
-# length. Both the tool schema and the handler were silent on length, so repeated
-# or large replies grew the item toward DynamoDB's 400 KB item-size limit -- past
+# An append with no bound on the entry size or the resulting list length grows
+# the item toward DynamoDB's 400 KB item-size limit -- past
 # which EVERY subsequent write to that document hard-fails, taking the document's
 # reply path down permanently -- while inflating the amount of stored untrusted
 # content that read_document later feeds back to the model.
@@ -189,9 +187,8 @@ _BODY_TOO_LONG_ERROR = (
 # model retrying is that the failure is PERMANENT, not that the text names the cap:
 # "no reply can be appended" is terminal under either cause. The cap itself is
 # published where the model reads it BEFORE choosing to call -- the reply tool
-# description in ``cdk/gateway_resources.py``, guarded against drift by
-# ``tests/test_published_limits.py`` -- which is the better home for a rule that is
-# constant anyway.
+# description in ``cdk/gateway_resources.py`` -- which is the better home for a
+# rule that is constant anyway.
 #
 # Distinguishing the two causes was considered and rejected. It is expressible:
 # ``ReturnValuesOnConditionCheckFailure=ALL_OLD`` returns the item in the exception

@@ -1,4 +1,4 @@
-"""Credential-header allowlist for the Lambda tool targets (F9 header channel).
+"""Credential-header allowlist for the Lambda tool targets.
 
 The REQUEST interceptor propagates the authoritative scope and the vended STS
 credentials as four custom request headers. The Gateway forwards a propagated
@@ -25,9 +25,9 @@ from typing import Any
 #: These literals MUST equal ``interceptor/credential_headers.CREDENTIAL_HEADERS``
 #: and the tool-side names in ``tools/common/credentials_context.py``. They are
 #: duplicated rather than imported because the CDK app runs from ``cdk/`` with its
-#: own virtualenv and neither package is on its import path;
-#: ``tests/test_header_contract_parity.py`` pins all three lists to each other, so
-#: a header added on one side and forgotten here breaks the suite.
+#: own virtualenv and neither package is on its import path. All three lists must
+#: stay equal: a header added on one side and forgotten here is dropped by the
+#: Gateway, and the tool fails closed.
 #:
 #: Getting this wrong fails CLOSED but confusingly: the Gateway DROPS any
 #: interceptor-supplied header a target has not allowlisted, so a typo produces a

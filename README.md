@@ -63,14 +63,17 @@ silent containment. None of that is in this repo, on purpose.
    model, and **fails closed** — a scrub error withholds the body rather than passing it
    through.
 6. Gateway log delivery is constrained to `TRACES` only, asserted at synth time, so the
-   build fails if anyone declares an `APPLICATION_LOGS` delivery source. Vended
-   credentials no longer transit the request body, and the vended `APPLICATION_LOGS`
-   record was re-measured with the real credentials in flight over seven legs covering
-   three of the four documented record kinds: no header name and no header value appears
-   in any of them. The constraint is kept for a different reason — those records carry a
-   `responseBody` field holding the tool's full answer, so a successful read would write
-   the entire document into a log group that has one partition for the whole gateway, and
-   field selection cannot help because `body` is the smallest selectable unit.
+   build fails if anyone declares an `APPLICATION_LOGS` delivery source. The reason is
+   what those records contain: each one carries a `responseBody` field holding the
+   tool's full answer, so one successful read writes the entire document into a log
+   group that has a single partition for the whole gateway — a copy of partitioned data
+   sitting behind an unpartitioned permission. Field selection cannot narrow it: `body`
+   is the smallest unit `recordFields` can select, and the message, `requestBody`,
+   `responseBody` and the policy decision all live inside it. Those records carry no
+   credential — `APPLICATION_LOGS` was measured with real vended credentials in flight
+   across seven legs covering three of the four documented record kinds, and no header
+   name and no header value appears in any of them — but the document exposure is
+   enough on its own.
 
 ## Deploy
 
@@ -89,7 +92,7 @@ silent containment. None of that is in this repo, on purpose.
 
 ```bash
 python3.14 -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt -r cdk/requirements.txt
+pip install -r cdk/requirements.txt
 
 cp config.example.json config.json      # set aws_region and bedrock_model_id
 
@@ -153,20 +156,6 @@ tool's credentials cannot see the other partitions, and the agent is told nothin
 reveals a restriction exists. `--claims` on the token script shows the resolved group if
 you want to check what scope you are acting as.
 
-## Tests
-
-The suite is fully offline (moto, stubs, synthesized templates) and needs no AWS
-credentials:
-
-```bash
-cp config.example.json config.json      # the synth tests load it
-python -m pytest
-```
-
-It pins the parts that carry the claim: the session-policy shape, both ABAC gates, the
-single credential-vending call site, fail-closed scrubbing, the `TRACES`-only log
-delivery constraint, and the write-target condition.
-
 ## Make it your own
 
 Two scopes ship as the demo tenants, `payments-core` and `billing-internal`. To model your
@@ -195,7 +184,6 @@ plan to run more than one copy in the same account.
 | `cedar/` | Cedar policies for tool-level authorization |
 | `shared/` | config loading shared by the CDK app and the handlers |
 | `scripts/` | `mint_demo_token.py` — the only path to a demo access token (the app client is SRP-only) |
-| `tests/` | the offline suite |
 
 ## License
 

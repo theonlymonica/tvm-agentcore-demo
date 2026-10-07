@@ -170,10 +170,8 @@ def _create_documents_table(scope: Construct) -> dynamodb.Table:
     * ``deletion_protection`` — deliberately NOT enabled. It is INCOMPATIBLE
       with this table's ``RemovalPolicy.DESTROY``: DynamoDB refuses to delete a
       protected table, so stack teardown would fail. Deleting the table on
-      teardown is a requirement pinned by
-      ``tests/test_synth_config.py::test_deletion_policy_is_delete``, and
-      ``tests/test_synth_operational_posture.py`` asserts the absence of
-      deletion protection so a future change cannot introduce the deadlock.
+      teardown is a requirement of this example, so deletion protection stays
+      off.
 
     Args:
         scope: The CDK Stack or Construct.

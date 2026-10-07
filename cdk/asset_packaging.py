@@ -1,60 +1,30 @@
 """Deterministic Lambda asset packaging.
 
-Every zip-asset Lambda in this stack is packaged from a source directory that is
-ALSO an import target for the test suite. ``pytest`` imports those modules,
-CPython writes ``__pycache__/*.pyc`` next to them, and ``Code.from_asset`` — which
-bundles the directory tree verbatim unless told otherwise — folds that bytecode
-into the asset. The asset fingerprint changes, so ``cdk diff`` reports the
-function's ``Code.S3Key`` as changed and the next deploy republishes it.
+``Code.from_asset`` bundles a source directory VERBATIM unless told otherwise, so
+any ``__pycache__/*.pyc`` CPython leaves next to the handlers gets folded into
+the asset. The fingerprint changes, ``cdk diff`` reports the function's
+``Code.S3Key`` as changed, and the next deploy republishes it.
 
-Observed on 2026-08-09: a comment-only edit to three Cedar policies produced a
-ten-resource changeset instead of three, because one local ``pytest`` run had
-moved the hashes of all five zip Lambdas (the three tool functions share the
-``tools/`` bundle, hence a single shared hash) plus the agent container image.
+The republication is harmless; the damage is to ``cdk diff`` as a pre-deploy
+check. Once Lambda hashes move on every local run the habit becomes "ignore the
+Lambda lines", and that is the habit under which a real unintended code change
+ships unnoticed. A second cost: the published artifact would carry ``.pyc`` files
+compiled by whichever local interpreter ran last, making the same commit produce
+different bundles.
 
-Why this matters more than the wasted republication
----------------------------------------------------
-The republication itself is harmless. The damage is to ``cdk diff`` as a
-pre-deploy check: once the Lambda hashes move on every run, the habit becomes
-"ignore the Lambda lines", and that is precisely the habit under which a REAL
-unintended code change ships unnoticed. During the 2026-08-09 deploy this noise
-sat in the same diff as a genuine unintended change (a wrong Bedrock model id),
-and the noise is what made the diff hard to read.
-
-Secondary cost: the published artifact carried ``.pyc`` files compiled by
-whichever local interpreter happened to run the tests. Python ignores bytecode
-whose magic number or source mtime does not match, so this was not a runtime
-hazard — but it made the artifact non-reproducible, since the same commit
-produced different bundles depending on whether someone had run the tests first.
-
-Why a helper rather than an ``exclude=`` at each call site
-----------------------------------------------------------
-The defect was an omission, and an omission recurs the moment a sixth Lambda is
-added. Routing every zip asset through :func:`python_lambda_code` makes the
-exclusion the default rather than something each author must remember, and
-``tests/test_synth_asset_packaging.py`` fails the build if a bare
-``lambda_.Code.from_asset`` reappears anywhere under ``cdk/``.
-
-Container assets share this list
---------------------------------
-``ASSET_EXCLUDE`` is also passed to BOTH container assets — the agent runtime
+Routing every zip asset through :func:`python_lambda_code` makes the exclusion
+the default rather than something each author must remember. ``ASSET_EXCLUDE`` is
+also passed to BOTH container assets — the agent runtime
 (``AgentRuntimeArtifact.from_asset``, ``cdk/runtime_resources.py``) and the REQUEST
-interceptor (``DockerImageCode.from_image_asset``, ``cdk/scoped_credentials_stack.py``) —
-which have the same exposure via their staged build contexts.
+interceptor (``DockerImageCode.from_image_asset``, ``cdk/scoped_credentials_stack.py``)
+— which have the same exposure via their staged build contexts.
 
-``interceptor/.dockerignore`` already excluded root-level caches, which is why that
-image was the ONE asset that did not churn on 2026-08-09. It is kept (it also trims
-``Dockerfile`` from the image layer, which ``exclude`` here does not) and the
-``exclude`` is added ALONGSIDE it, because a slash-free ``.dockerignore`` pattern
-does not reach a nested cache. Editing that file instead would change its contents
-and move the one asset hash that was already correct.
-
-The agent got no ``.dockerignore`` for the same reason: one was written first and
-then discarded after measurement — adding ``agent/.dockerignore`` moved that asset's
-hash even with the file excluding itself, because any new file in the context
-changes the fingerprint, so the fix would have forced exactly the one-time container
-rebuild it exists to prevent. Passing ``exclude=`` is hash-neutral, adds no file, and
-keeps one source of truth.
+``interceptor/.dockerignore`` is kept alongside it: it also trims ``Dockerfile``
+from the image layer, which ``exclude`` here does not, and a slash-free
+``.dockerignore`` pattern does not reach a nested cache. The agent has no
+``.dockerignore`` on purpose — any new file in a build context changes that
+asset's fingerprint, so adding one would force the very container rebuild the
+exclusion exists to avoid. Passing ``exclude=`` is hash-neutral and adds no file.
 
 Documentation references:
   - aws_cdk.aws_lambda.Code.from_asset / AssetOptions.exclude (glob patterns
@@ -95,22 +65,17 @@ import aws_cdk.aws_lambda as lambda_
 #: force exactly the one-time container rebuild this change avoids. ``exclude``
 #: patterns are not fingerprinted, so the list can grow for free.
 #:
-#: ``*.pyc`` / ``*.pyo`` catch stray bytecode written outside a cache directory,
-#: and ``.pytest_cache`` catches pytest's scratch directory, which is written at
-#: pytest's ROOTDIR (pinned to the repository root by ``pytest.ini``) — not inside
-#: any asset root, so it is cheap insurance rather than a fix for something
-#: observed.
+#: ``*.pyc`` / ``*.pyo`` catch stray bytecode written outside a cache directory.
 #:
-#: Deliberately NOT excluded: ``*.md``, tests, or anything else non-essential.
-#: This list exists to make bundles DETERMINISTIC, not to minimise them —
-#: trimming files that are stable across runs would change the asset hashes
-#: without buying reproducibility, and every such exclusion is a new way to
-#: accidentally omit a module the handler imports at runtime.
+#: Deliberately NOT excluded: ``*.md`` or anything else non-essential. This list
+#: exists to make bundles DETERMINISTIC, not to minimise them — trimming files
+#: that are stable across runs would change the asset hashes without buying
+#: reproducibility, and every such exclusion is a new way to accidentally omit a
+#: module the handler imports at runtime.
 ASSET_EXCLUDE = [
     "__pycache__",
     "*.pyc",
     "*.pyo",
-    ".pytest_cache",
     # Depth coverage for IgnoreMode.DOCKER (container contexts) — see above.
     "**/__pycache__",
     "**/*.pyc",
