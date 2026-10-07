@@ -135,8 +135,21 @@ from collections.abc import Iterator
 # project's own wire contract.
 #
 # The families covered, and why each is here:
-#   * the injected `context` object and its `tenant_credentials` child — this
-#     repository's wire contract (see interceptor/handler.py);
+#   * `bedrockAgentCorePropagatedHeaders` — the Gateway's client-context key that
+#     carries ALL FOUR propagated headers. Deleting this one key removes every
+#     credential header at once, which is why it is listed as well as the
+#     individual names: a tool that dumps its whole client context produces this
+#     container, not the leaf names;
+#   * `x-tvm-access-key-id` / `x-tvm-secret-access-key` / `x-tvm-session-token` —
+#     the credential headers themselves (see interceptor/credential_headers.py).
+#     They are listed EXPLICITLY because `_normalise_key` strips separators but
+#     not the `x-tvm` prefix, so `x-tvm-session-token` normalises to
+#     `xtvmsessiontoken` and is NOT covered by the `session_token` entry;
+#   * the `context` object and its `tenant_credentials` child — the RETIRED
+#     request-body wire contract. Kept deliberately: the request body no longer
+#     carries them, but this scrubber guards the RESPONSE, whose shape is produced
+#     by the tool. A tool still free to build an object by those names is a tool
+#     whose output still has to be scrubbed;
 #   * `credentials` — the STS `AssumeRole` / `GetSessionToken` reply member that
 #     carries the three fields;
 #   * access key id / secret access key / session token — the three fields, in
@@ -149,6 +162,10 @@ from collections.abc import Iterator
 # ---------------------------------------------------------------------------
 _CREDENTIAL_KEY_NAME_SPELLINGS: frozenset[str] = frozenset(
     {
+        "bedrockAgentCorePropagatedHeaders",
+        "x-tvm-access-key-id",
+        "x-tvm-secret-access-key",
+        "x-tvm-session-token",
         "context",
         "tenant_credentials",
         "credentials",

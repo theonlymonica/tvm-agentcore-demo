@@ -39,6 +39,13 @@ import reply.handler as reply_module
 import search_documents.handler as search_module
 from reply.handler import handler as reply_handler
 from search_documents.handler import handler as search_documents_handler
+from header_context import (
+    ACCESS_KEY_ID_HEADER,
+    SECRET_ACCESS_KEY_HEADER,
+    SERVED_SCOPE_HEADER,
+    SESSION_TOKEN_HEADER,
+    lambda_context,
+)
 from tests.conftest import SERVED_SCOPE, make_document
 
 # Matches the credential shapes the other tool tests use, so a fixture never
@@ -48,16 +55,21 @@ _SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 _SESSION_TOKEN = "IQoJb3JpZ2luX2VjEXAMPLETOKEN"
 
 
-def _context(scope: str = SERVED_SCOPE) -> dict[str, Any]:
-    """Return a well-formed injected ``context`` object for ``scope``."""
-    return {
-        "served_scope": scope,
-        "tenant_credentials": {
-            "access_key_id": _ACCESS_KEY_ID,
-            "secret_access_key": _SECRET_ACCESS_KEY,
-            "session_token": _SESSION_TOKEN,
-        },
-    }
+def _context(scope: str = SERVED_SCOPE) -> Any:
+    """Return a Lambda CONTEXT carrying the propagated credential headers.
+
+    Under the F9 header channel the scope and credentials no longer ride in the
+    event: they arrive on the Lambda client context. The helper keeps its name and
+    signature so these tests still read as "a well-formed request for this scope".
+    """
+    return lambda_context(
+        {
+            SERVED_SCOPE_HEADER: scope,
+            ACCESS_KEY_ID_HEADER: _ACCESS_KEY_ID,
+            SECRET_ACCESS_KEY_HEADER: _SECRET_ACCESS_KEY,
+            SESSION_TOKEN_HEADER: _SESSION_TOKEN,
+        }
+    )
 
 
 def _matching_documents(count: int, *, scope: str = SERVED_SCOPE) -> list[dict[str, Any]]:
@@ -84,7 +96,7 @@ class TestSearchResultCap:
         put_documents(_matching_documents(search_module._MAX_RESULTS * 2))
 
         result = search_documents_handler(
-            {"query": "refund", "context": _context()}, None
+            {"query": "refund"}, _context()
         )
 
         assert len(result["results"]) == search_module._MAX_RESULTS
@@ -114,7 +126,7 @@ class TestSearchResultCap:
         put_documents(documents)
 
         result = search_documents_handler(
-            {"query": "refund", "context": _context()}, None
+            {"query": "refund"}, _context()
         )
 
         assert len(result["results"]) == search_module._MAX_RESULTS
@@ -130,7 +142,7 @@ class TestSearchResultCap:
         put_documents(_matching_documents(search_module._MAX_RESULTS + 1))
 
         result = search_documents_handler(
-            {"query": "refund", "context": _context()}, None
+            {"query": "refund"}, _context()
         )
 
         assert len(result["results"]) == search_module._MAX_RESULTS
@@ -142,7 +154,7 @@ class TestSearchResultCap:
         put_documents(_matching_documents(3))
 
         result = search_documents_handler(
-            {"query": "refund", "context": _context()}, None
+            {"query": "refund"}, _context()
         )
 
         assert len(result["results"]) == 3
@@ -154,7 +166,7 @@ class TestSearchResultCap:
         put_documents([make_document(SERVED_SCOPE, "PAY-001", title="Release status")])
 
         result = search_documents_handler(
-            {"query": "refund", "context": _context()}, None
+            {"query": "refund"}, _context()
         )
 
         assert result == {"results": [], "truncated": False}
@@ -222,7 +234,7 @@ class TestSearchReadCap:
     def recording_table(self, monkeypatch: pytest.MonkeyPatch) -> _RecordingTable:
         table = _RecordingTable()
         monkeypatch.setattr(
-            search_module, "documents_table_from_event", lambda _event: table
+            search_module, "documents_table_from_context", lambda _ctx: table
         )
         return table
 
@@ -230,7 +242,7 @@ class TestSearchReadCap:
         self, scoped_env, recording_table: _RecordingTable
     ) -> None:
         result = search_documents_handler(
-            {"query": "refund", "context": _context()}, None
+            {"query": "refund"}, _context()
         )
 
         # The read bound held: the walk stopped at the page cap rather than
@@ -246,7 +258,7 @@ class TestSearchReadCap:
     def test_every_query_carries_a_per_request_limit(
         self, scoped_env, recording_table: _RecordingTable
     ) -> None:
-        search_documents_handler({"query": "refund", "context": _context()}, None)
+        search_documents_handler({"query": "refund"}, _context())
 
         for call in recording_table.calls:
             assert call["Limit"] == search_module._PAGE_ITEM_LIMIT
@@ -256,7 +268,7 @@ class TestSearchReadCap:
     ) -> None:
         # The caps must not have broken pagination itself: the first request
         # carries no cursor and each later one resumes from the previous page.
-        search_documents_handler({"query": "refund", "context": _context()}, None)
+        search_documents_handler({"query": "refund"}, _context())
 
         assert "ExclusiveStartKey" not in recording_table.calls[0]
         for index, call in enumerate(recording_table.calls[1:], start=1):
@@ -271,7 +283,7 @@ class TestSearchReadCap:
         # The note is static: it must not become a new echo channel for the
         # model-supplied query or for the injected scope.
         result = search_documents_handler(
-            {"query": "refund", "context": _context()}, None
+            {"query": "refund"}, _context()
         )
 
         assert "refund" not in result["note"]
@@ -293,7 +305,7 @@ class TestSearchPaginationBoundaries:
     ) -> _RecordingTable:
         table = _RecordingTable(pages=pages)
         monkeypatch.setattr(
-            search_module, "documents_table_from_event", lambda _event: table
+            search_module, "documents_table_from_context", lambda _ctx: table
         )
         return table
 
@@ -321,7 +333,7 @@ class TestSearchPaginationBoundaries:
         )
 
         result = search_documents_handler(
-            {"query": "refund", "context": _context()}, None
+            {"query": "refund"}, _context()
         )
 
         assert len(result["results"]) == search_module._MAX_RESULTS
@@ -338,7 +350,7 @@ class TestSearchPaginationBoundaries:
         table = self._install(monkeypatch, [{"Items": []}])
 
         result = search_documents_handler(
-            {"query": "refund", "context": _context()}, None
+            {"query": "refund"}, _context()
         )
 
         assert len(table.calls) == search_module._MAX_PAGE_READS
@@ -354,7 +366,7 @@ class TestSearchPaginationBoundaries:
         table = self._install(monkeypatch, [{}])
 
         result = search_documents_handler(
-            {"query": "refund", "context": _context()}, None
+            {"query": "refund"}, _context()
         )
 
         assert len(table.calls) == search_module._MAX_PAGE_READS
@@ -386,7 +398,7 @@ class TestReplyBodyBound:
         body = "x" * reply_module._MAX_BODY_BYTES
 
         result = reply_handler(
-            {"doc_id": "PAY-001", "body": body, "context": _context()}, None
+            {"doc_id": "PAY-001", "body": body}, _context()
         )
 
         assert result == {"success": True}
@@ -399,7 +411,7 @@ class TestReplyBodyBound:
         body = "x" * (reply_module._MAX_BODY_BYTES + 1)
 
         result = reply_handler(
-            {"doc_id": "PAY-001", "body": body, "context": _context()}, None
+            {"doc_id": "PAY-001", "body": body}, _context()
         )
 
         assert result == {"error": reply_module._BODY_TOO_LONG_ERROR}
@@ -422,7 +434,7 @@ class TestReplyBodyBound:
         assert len(body.encode("utf-8")) > reply_module._MAX_BODY_BYTES
 
         result = reply_handler(
-            {"doc_id": "PAY-001", "body": body, "context": _context()}, None
+            {"doc_id": "PAY-001", "body": body}, _context()
         )
 
         assert result == {"error": reply_module._BODY_TOO_LONG_ERROR}
@@ -450,7 +462,7 @@ class TestReplyBodyBound:
         body = "sentinel-body-text" + "x" * reply_module._MAX_BODY_BYTES
 
         result = reply_handler(
-            {"doc_id": "PAY-001", "body": body, "context": _context()}, None
+            {"doc_id": "PAY-001", "body": body}, _context()
         )
 
         message = result["error"]
@@ -481,7 +493,7 @@ class TestReplyConversationBound:
         put_documents([make_document(SERVED_SCOPE, "PAY-001")])
 
         result = reply_handler(
-            {"doc_id": "PAY-001", "body": "first", "context": _context()}, None
+            {"doc_id": "PAY-001", "body": "first"}, _context()
         )
 
         assert result == {"success": True}
@@ -498,7 +510,7 @@ class TestReplyConversationBound:
         put_documents([item])
 
         result = reply_handler(
-            {"doc_id": "PAY-001", "body": "last", "context": _context()}, None
+            {"doc_id": "PAY-001", "body": "last"}, _context()
         )
 
         assert result == {"success": True}
@@ -516,7 +528,7 @@ class TestReplyConversationBound:
         put_documents([item])
 
         result = reply_handler(
-            {"doc_id": "PAY-001", "body": "one too many", "context": _context()}, None
+            {"doc_id": "PAY-001", "body": "one too many"}, _context()
         )
 
         # Distinct from the generic error so the model stops retrying an append
@@ -543,11 +555,11 @@ class TestReplyConversationBound:
                 )
 
         monkeypatch.setattr(
-            reply_module, "documents_table_from_event", lambda _event: _FailingTable()
+            reply_module, "documents_table_from_context", lambda _event: _FailingTable()
         )
 
         result = reply_handler(
-            {"doc_id": "PAY-001", "body": "hello", "context": _context()}, None
+            {"doc_id": "PAY-001", "body": "hello"}, _context()
         )
 
         assert result == {"error": reply_module._GENERIC_ERROR}

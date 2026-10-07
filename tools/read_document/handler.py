@@ -4,7 +4,7 @@ read_document Lambda handler (scope-partitioned, scoped-credential read).
 Given a ``doc_id`` and the interceptor-injected authoritative ``served_scope``,
 this handler performs a strongly-consistent composite-key ``GetItem`` against the
 Documents table using *scoped temporary credentials* vended by
-:func:`documents_table_from_event` — never the Lambda's own execution role.
+:func:`documents_table_from_context` — never the Lambda's own execution role.
 
 Scope-partitioned schema:
     - Partition key: ``scope`` (the scope that owns the document).
@@ -62,16 +62,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 # execution role holds NO sts:AssumeRole and NO DynamoDB permission, so it cannot
 # reach the table any other way.
 # Wire contract: read the authoritative served scope from
-# event["context"]["served_scope"] via served_scope_from_event, and build the
-# partition-confined DynamoDB Table from event["context"]["tenant_credentials"]
-# via documents_table_from_event. Both readers fail CLOSED (raise
-# ScopedCredentialsError) on a missing/malformed context and NEVER fall back to
+# the propagated headers via served_scope_from_context, and build the
+# partition-confined DynamoDB Table from the propagated credential headers
+# via documents_table_from_context. Both readers fail CLOSED (raise
+# ScopedCredentialsError) on missing/malformed propagated headers and NEVER fall back to
 # the execution role or the default chain. The handler calls the two readers
 # directly, consistent with search_documents and reply.
 from common.scoped_credentials import (
     ScopedCredentialsError,
-    documents_table_from_event,
-    served_scope_from_event,
+    documents_table_from_context,
+    served_scope_from_context,
 )
 
 # Module logger. Evidence logging only (observability); never logs the
@@ -88,13 +88,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     Args:
         event: The Lambda event — the map of ``inputSchema`` properties to
-            their values, plus the interceptor-injected ``context`` object.
-            Expected keys:
+            their values, and nothing else. Expected keys:
                 - ``doc_id`` (str): the declared sort key of the document
                   to read (model-supplied).
-                - ``context`` (object): the interceptor-injected object carrying
-                  ``served_scope`` and ``tenant_credentials``.
-        context: The Lambda context (unused).
+        context: The Lambda context, carrying the propagated credential headers
+            at ``client_context.custom["bedrockAgentCorePropagatedHeaders"]``.
 
     Returns:
         A dict representing the tool response. On success, contains ``body`` and
@@ -104,15 +102,15 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """
     doc_id = _clean_str(event.get("doc_id"))
 
-    # Read the served scope AND build the scoped DynamoDB client from the injected
-    # `context` object (event["context"]) — NOT from any flat top-level field.
-    # A missing/malformed context fails CLOSED: generic error, and the tool NEVER
+    # Read the served scope AND build the scoped DynamoDB client from the
+    # propagated credential headers in the Lambda client context — never from the event.
+    # A missing/malformed set of propagated headers fails CLOSED: generic error, and the tool NEVER
     # falls back to its execution role (which holds no DynamoDB permission) or the
     # default credential chain. The generic message names no scope and no
-    # credential field, and echoes no part of event/arguments/context.
+    # credential field, and echoes no part of the event or the propagated headers.
     try:
-        served_scope = served_scope_from_event(event)
-        table = documents_table_from_event(event)
+        served_scope = served_scope_from_context(context)
+        table = documents_table_from_context(context)
     except ScopedCredentialsError:
         return {"error": "document identifier is invalid"}
 

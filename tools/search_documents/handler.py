@@ -79,8 +79,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 # partitions and is not permitted by the session policy.
 from common.scoped_credentials import (
     ScopedCredentialsError,
-    documents_table_from_event,
-    served_scope_from_event,
+    documents_table_from_context,
+    served_scope_from_context,
 )
 
 # Module logger. Evidence logging only (observability); never logs the
@@ -167,7 +167,7 @@ def _query_served_partition(
 
     Args:
         table: The DynamoDB ``Table`` built from the interceptor-vended
-            credentials (:func:`documents_table_from_event`).
+            credentials (:func:`documents_table_from_context`).
         served_scope: The authoritative, interceptor-injected scope partition.
         query_lower: The search query, already stripped and lowercased.
 
@@ -243,11 +243,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Lambda handler for the search_documents tool.
 
     Args:
-        event: The Lambda event (map of ``inputSchema`` properties plus the
-            interceptor-injected ``context`` object). Expected keys:
-            "query" (str, model-supplied) and "context" (object), from which the
-            authoritative served scope and scoped credentials are read.
-        context: The Lambda context (unused).
+        event: The Lambda event (map of ``inputSchema`` properties, and nothing
+            else). Expected key: "query" (str, model-supplied). The authoritative
+            served scope and the scoped credentials come from the propagated
+            headers in the Lambda client context, not from the event.
+        context: The Lambda context, carrying the propagated credential headers
+            at ``client_context.custom["bedrockAgentCorePropagatedHeaders"]``.
 
     Returns:
         A dict representing the tool response. On success,
@@ -268,18 +269,18 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     query_lower = query.strip().lower()
 
     # Read the authoritative served scope and build the partition-confined table
-    # client from the interceptor-injected `context` object:
-    # served_scope_from_event -> event["context"]["served_scope"];
-    # documents_table_from_event -> event["context"]["tenant_credentials"].
-    # A missing/malformed context fails CLOSED: served_scope_from_event raises
+    # client from the propagated credential headers:
+    # served_scope_from_context -> the propagated scope header;
+    # documents_table_from_context -> the propagated credential headers.
+    # A missing/malformed set of propagated headers fails CLOSED: served_scope_from_context raises
     # ScopedCredentialsError, so we return a generic error and NEVER fall back to
     # the execution role (which holds no DynamoDB permission) or the default
     # credential chain. The generic message names no scope and no credential
-    # field, and echoes no part of event/arguments/context. On a query failure we
+    # field, and echoes no part of the event or the propagated headers. On a query failure we
     # likewise return the generic error and never fall back.
     try:
-        served_scope = served_scope_from_event(event)
-        table = documents_table_from_event(event)
+        served_scope = served_scope_from_context(context)
+        table = documents_table_from_context(context)
         # Evidence logging (observability only): the authoritative served-scope
         # scalar. Never logs the event, arguments, context, or credentials.
         logger.info("search_documents served_scope=%r", served_scope)

@@ -50,14 +50,24 @@ silent containment. None of that is in this repo, on purpose.
    that scope's partition **and** a `scope` session tag. The role's trust policy requires
    the tag, and the role's identity policy is itself conditioned on it: two independent
    gates, so neither alone is the boundary.
-4. The vended credentials reach the Lambda tool target through the request payload, and
-   the tool uses them for every DynamoDB call. The tool has no ambient data permissions.
+4. The vended credentials reach the Lambda tool target as **allowlisted propagated
+   request headers**, never in the request payload: the interceptor returns them in
+   `transformedGatewayRequest.headers`, each target allowlists the names in
+   `metadataConfiguration.allowedRequestHeaders`, and the tool reads them from
+   `context.client_context.custom["bedrockAgentCorePropagatedHeaders"]`. The request
+   body is forwarded unchanged, so it carries only the model-supplied arguments and no
+   tool's `inputSchema` ever declares a credential — the model cannot see, name or echo
+   one. The tool has no ambient data permissions and uses the propagated credentials
+   for every DynamoDB call.
 5. The response interceptor scrubs credential shapes out of anything heading back to the
    model, and **fails closed** — a scrub error withholds the body rather than passing it
    through.
-6. Gateway log delivery is constrained to `TRACES` only, so vended credentials cannot be
-   written to CloudWatch as application logs. The constraint is asserted at synth time,
-   so the build fails if anyone declares an `APPLICATION_LOGS` delivery source.
+6. Gateway log delivery is constrained to `TRACES` only. Vended credentials no longer
+   transit the request body, and the vended `APPLICATION_LOGS` record was measured with
+   a non-secret sentinel in their place: it captured the request and contained none of
+   the header names or values. The constraint is kept anyway — one record type is a thin
+   basis for removing a guard against credential leakage — and is asserted at synth
+   time, so the build fails if anyone declares an `APPLICATION_LOGS` delivery source.
 
 ## Deploy
 

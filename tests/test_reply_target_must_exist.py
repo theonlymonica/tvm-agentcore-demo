@@ -36,6 +36,8 @@ known residual risk. Nothing here asserts a cross-scope property either
 credentials could not tell an enforced partition boundary from an unenforced one.
 ``TestForeignPartitionIdIsNotMaterialised`` is about the SERVED partition only: the
 shape it rules out is an invented-but-real-elsewhere id being created locally.
+
+See ``notes/reply-write-target-must-exist.md``.
 """
 
 from __future__ import annotations
@@ -44,6 +46,13 @@ from typing import Any
 
 import reply.handler as reply_module
 from reply.handler import handler as reply_handler
+from header_context import (
+    ACCESS_KEY_ID_HEADER,
+    SECRET_ACCESS_KEY_HEADER,
+    SERVED_SCOPE_HEADER,
+    SESSION_TOKEN_HEADER,
+    lambda_context,
+)
 from tests.conftest import SERVED_SCOPE, make_document
 
 # Matches the credential shapes the other tool tests use, so a fixture never
@@ -69,23 +78,26 @@ _CAP_ONLY_CONDITION = (
 )
 
 
-def _context(scope: str = SERVED_SCOPE) -> dict[str, Any]:
-    """Return a well-formed injected ``context`` object for ``scope``.
+def _context(scope: str = SERVED_SCOPE) -> Any:
+    """Return a Lambda CONTEXT carrying the propagated credential headers.
+
+    Under the F9 header channel the scope and credentials no longer ride in the
+    event: the Gateway delivers them on the Lambda client context.
 
     Args:
         scope: The served scope to advertise as authoritative.
 
     Returns:
-        The ``context`` object shape the REQUEST interceptor injects.
+        A Lambda context object shaped like the one a Gateway-invoked tool gets.
     """
-    return {
-        "served_scope": scope,
-        "tenant_credentials": {
-            "access_key_id": _ACCESS_KEY_ID,
-            "secret_access_key": _SECRET_ACCESS_KEY,
-            "session_token": _SESSION_TOKEN,
-        },
-    }
+    return lambda_context(
+        {
+            SERVED_SCOPE_HEADER: scope,
+            ACCESS_KEY_ID_HEADER: _ACCESS_KEY_ID,
+            SECRET_ACCESS_KEY_HEADER: _SECRET_ACCESS_KEY,
+            SESSION_TOKEN_HEADER: _SESSION_TOKEN,
+        }
+    )
 
 
 def _item(table: Any, doc_id: str, *, scope: str = SERVED_SCOPE) -> dict[str, Any]:
@@ -113,7 +125,7 @@ def _reply(doc_id: str, body: str = "appended by the model") -> dict[str, Any]:
         The handler's response dict.
     """
     return reply_handler(
-        {"doc_id": doc_id, "body": body, "context": _context()}, None
+        {"doc_id": doc_id, "body": body}, _context()
     )
 
 

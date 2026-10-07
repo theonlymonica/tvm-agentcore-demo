@@ -44,12 +44,14 @@ CloudTrail does not record, and should not.
 Not by scrubbing, which can rot, but structurally:
 
 - The interceptor's record is emitted **before** the vend, so no credential exists in
-  scope when it is built. The `context` key — the one that carries
-  `tenant_credentials` in the enriched body — is excluded, and every builder parameter
+  scope when it is built. The `context` key — the RETIRED request-body credential key,
+  which no tool declares or reads — is excluded, and every builder parameter
   is keyword-only so no unnamed value can be passed in.
 - CloudTrail redacts by itself: `InvokeAgentRuntime` shows
   `response: HIDDEN_DUE_TO_SECURITY_REASONS`, and `AssumeRole` never returns the keys.
-- Gateway application-log delivery stays disabled, so no enriched body or enriched
+- The credentials travel as propagated request headers and the request body is forwarded
+  unchanged, so the body carries only the model-supplied arguments. Gateway
+  application-log delivery stays disabled as well, so no enriched body or enriched
   arguments can reach a log through it.
 
 ## The gap: row 6 has no join key

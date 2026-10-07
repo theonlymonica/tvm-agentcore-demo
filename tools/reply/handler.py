@@ -5,7 +5,7 @@ Given a ``doc_id``, a ``body``, and the interceptor-injected authoritative
 ``served_scope``, this handler appends one entry to the target document's
 ``conversation`` List attribute using a DynamoDB composite-key ``UpdateItem``
 performed with *scoped WRITE temporary credentials* vended by
-:func:`documents_table_from_event` — never the Lambda's own execution role.
+:func:`documents_table_from_context` — never the Lambda's own execution role.
 
 Scope-partitioned schema:
     - Partition key: ``scope`` (the scope that owns the document).
@@ -115,8 +115,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 # cannot write to the table any other way.
 from common.scoped_credentials import (
     ScopedCredentialsError,
-    documents_table_from_event,
-    served_scope_from_event,
+    documents_table_from_context,
+    served_scope_from_context,
 )
 
 # Module logger. Evidence/latency logging only (observability); never logs the
@@ -212,16 +212,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     Args:
         event: The Lambda event — the map of ``inputSchema`` properties to their
-            values, plus the interceptor-injected ``context`` object. Expected
-            keys:
+            values, and nothing else. Expected keys:
                 - ``doc_id`` (str): the sort key of the document to append to
                   (model-supplied).
                 - ``body`` (str): the text to append to the conversation
                   (model-supplied).
-                - ``context`` (object): the interceptor-injected object carrying
-                  the authoritative ``served_scope`` (the partition key) and the
-                  scoped ``tenant_credentials``.
-        context: The Lambda context (unused).
+        context: The Lambda context, carrying the propagated credential headers
+            at ``client_context.custom["bedrockAgentCorePropagatedHeaders"]``.
 
     Returns:
         A dict representing the tool response. On success: ``{"success": True}``.
@@ -253,16 +250,16 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return {"error": _BODY_TOO_LONG_ERROR}
 
     # Read the authoritative served scope and build the scoped WRITE table client
-    # from the interceptor-injected `context` object:
-    # served_scope_from_event -> event["context"]["served_scope"];
-    # documents_table_from_event -> event["context"]["tenant_credentials"] (the
+    # from the propagated credential headers:
+    # served_scope_from_context -> the propagated scope header;
+    # documents_table_from_context -> the propagated credential headers (the
     # DocumentsWriteRole credentials the interceptor vended with a LeadingKeys
     # write session policy confining UpdateItem to the served partition). A
-    # missing/malformed context fails CLOSED: served_scope_from_event raises
+    # missing/malformed set of propagated headers fails CLOSED: served_scope_from_context raises
     # ScopedCredentialsError, so we return a generic error and NEVER fall back to
     # the Lambda execution role (which holds no direct write permission) or the
     # default credential chain. The generic message names no scope and no
-    # credential field, and echoes no part of event/arguments/context.
+    # credential field, and echoes no part of the event or the propagated headers.
     #
     # UpdateExpression appends the body to the conversation list:
     #   SET conversation = list_append(if_not_exists(conversation, :empty), :entry)
@@ -306,8 +303,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     # requirement -- the LeadingKeys write session policy already permits
     # UpdateItem on this key.
     try:
-        served_scope = served_scope_from_event(event)
-        table = documents_table_from_event(event)
+        served_scope = served_scope_from_context(context)
+        table = documents_table_from_context(context)
         _t0 = time.perf_counter()
         table.update_item(
             # Composite key REQUIRED: PK ``scope`` + SK ``doc_id``. The model-supplied

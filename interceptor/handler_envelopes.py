@@ -32,19 +32,46 @@ from typing import Any, Optional
 INTERCEPTOR_OUTPUT_VERSION = "1.0"
 
 
-def allow(body: dict[str, Any]) -> dict[str, Any]:
+def allow(
+    body: dict[str, Any],
+    headers: Optional[dict[str, str]] = None,
+) -> dict[str, Any]:
     """Build a pass-through / allow REQUEST-interceptor output envelope.
+
+    ``headers``, when supplied, is emitted as
+    ``mcp.transformedGatewayRequest.headers``. The Gateway MERGES those headers
+    with the target's ``metadataConfiguration.allowedRequestHeaders`` allowlist and
+    forwards them to the target, with interceptor-provided values taking precedence
+    over client-provided ones. A header NOT in the target's allowlist is dropped
+    (``Authorization`` is the single documented exception), so this argument alone
+    does not make a header arrive — the target must allowlist it too.
+
+    Omitting ``headers`` leaves the ``headers`` key out of the envelope entirely,
+    so existing callers keep emitting the exact body-only shape they did before.
+
+    Reference (AWS Documentation MCP server, per the ``aws-docs-lookup`` rule):
+        - Header propagation from an interceptor lambda (the
+          ``transformedGatewayRequest.headers`` shape, allowlist merge, and
+          interceptor-over-client precedence):
+          https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-headers.html
 
     Args:
         body: The (possibly scope-injected) JSON-RPC request body to forward.
+        headers: Optional request headers to propagate to the target. Each name
+            must satisfy the Gateway's ``^[a-zA-Z0-9_-]+$`` rule and must be
+            allowlisted on the target to be forwarded.
 
     Returns:
         An ``interceptorOutputVersion: "1.0"`` envelope carrying
-        ``mcp.transformedGatewayRequest.body``.
+        ``mcp.transformedGatewayRequest.body``, plus
+        ``mcp.transformedGatewayRequest.headers`` when ``headers`` is non-empty.
     """
+    transformed: dict[str, Any] = {"body": body}
+    if headers:
+        transformed["headers"] = dict(headers)
     return {
         "interceptorOutputVersion": INTERCEPTOR_OUTPUT_VERSION,
-        "mcp": {"transformedGatewayRequest": {"body": body}},
+        "mcp": {"transformedGatewayRequest": transformed},
     }
 
 

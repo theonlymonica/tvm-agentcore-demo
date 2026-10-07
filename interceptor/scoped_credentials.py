@@ -91,7 +91,6 @@ Functions:
     vend_scoped_credentials: AssumeRole (DurationSeconds=900) with a ``scope``
         session tag, the inline session policy, ``SourceIdentity`` = the token's
         ``sub``, and the derived ``RoleSessionName``; returns temp creds.
-    build_tenant_context: Assemble the `context` wire-contract object.
     reset_sts_client: Drop the shared STS client (test seam only).
 
 Attribution (why this module sets two identity parameters):
@@ -662,52 +661,10 @@ def vend_scoped_credentials(
         "session_token": raw["SessionToken"],
     }
 
-
-def build_tenant_context(
-    served_scope: str,
-    creds: dict[str, str],
-) -> dict[str, Any]:
-    """Assemble the ``context`` wire-contract object for ``arguments["context"]``.
-
-    Canonical helper for the single-``context`` wire contract. The REQUEST
-    interceptor writes the returned object as the sole ``context`` key it adds to
-    the (deep-copied) tool ``arguments``.
-
-    The object carries EXACTLY two keys::
-
-        {
-            "served_scope": "<scope>",
-            "tenant_credentials": {
-                "access_key_id": ...,
-                "secret_access_key": ...,
-                "session_token": ...,
-            },
-        }
-
-    ``tenant_credentials`` is rebuilt here from the three named snake_case fields
-    only, so any extra key present on ``creds`` is dropped and never reaches the
-    wire. The STS-to-snake_case field mapping (``AccessKeyId``->``access_key_id``,
-    ``SecretAccessKey``->``secret_access_key``, ``SessionToken``->``session_token``)
-    and the exclusion of ``Expiration`` happen upstream in
-    :func:`vend_scoped_credentials`, where the raw STS ``Credentials`` response is
-    shaped.
-
-    Args:
-        served_scope: The authoritative, JWT-derived scope string.
-        creds: The three-field credentials dict returned by
-            :func:`vend_scoped_credentials` (``access_key_id`` /
-            ``secret_access_key`` / ``session_token``).
-
-    Returns:
-        The ``context`` object carrying exactly ``served_scope`` and
-        ``tenant_credentials`` (which in turn carries exactly the three
-        snake_case credential fields).
-    """
-    return {
-        "served_scope": served_scope,
-        "tenant_credentials": {
-            "access_key_id": creds["access_key_id"],
-            "secret_access_key": creds["secret_access_key"],
-            "session_token": creds["session_token"],
-        },
-    }
+# `build_tenant_context` used to live here. It assembled the `context` object the
+# interceptor wrote into `arguments["context"]`, and it is DELETED rather than kept
+# unused: a helper that still knows how to package credentials into a request-body
+# object is a path back to the body, and the point of the header channel is that
+# no such path exists. `tests/test_no_body_credential_path.py` asserts that no
+# module names it. The credentials are packaged by
+# `interceptor/credential_headers.build_credential_headers` instead.

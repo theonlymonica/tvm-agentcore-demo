@@ -34,14 +34,24 @@ Two consequences worth knowing:
 
 WHAT IS DELIBERATELY EXCLUDED.
 
-The model-supplied ``context`` key is dropped before the arguments are recorded, for two
-independent reasons. First, the handler's contract is that any value already at
-``arguments["context"]`` is overwritten WITHOUT BEING READ — recording it would break
-that promise, and the value is attacker-controlled (the body is written by the model).
-Second, ``context`` is the exact key that carries ``tenant_credentials`` in the ENRICHED
-body, so excluding it means this record cannot carry a credential-shaped object even if
-someone later moves the emit call after the vend. The structural guarantee above is the
-primary defence; this is the belt to its braces.
+The model-supplied ``context`` key is dropped before the arguments are recorded.
+
+NOTE — the ORIGINAL two reasons no longer hold, and are recorded here so nobody
+re-derives them. They were: (1) the handler overwrote any value at
+``arguments["context"]`` WITHOUT READING IT, so recording it would break that
+promise; and (2) ``context`` was the exact key that carried ``tenant_credentials``
+in the ENRICHED body. Neither is true now: the credentials travel as propagated
+request headers and the body is forwarded unchanged, so the interceptor writes
+nothing into ``arguments`` at all.
+
+The exclusion is KEPT on a different and still-valid argument. No tool declares
+``context`` in its ``inputSchema`` and no tool reads it, so a value arriving there
+is model-supplied noise that cannot affect what the tool does — dropping it loses
+nothing causally relevant to the request. And because it is the RETIRED credential
+key, keeping it out means this log line cannot carry a credential-shaped object
+even if a future change moved the emit call or put a credential back in the body.
+Every argument a tool actually acts on (``doc_id`` / ``query`` / ``body``) IS
+recorded.
 
 Functions:
     build_audit_record: Assemble the record from the pre-vend facts.

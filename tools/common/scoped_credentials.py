@@ -5,19 +5,25 @@ The REQUEST interceptor performs ``sts:AssumeRole`` with the inline
 ``dynamodb:LeadingKeys`` session policy and passes the resulting short-lived,
 partition-confined credentials to the tool.
 
-Wire contract: the interceptor injects a single UNDECLARED ``context`` object at
-``arguments["context"]`` (mapped into the Lambda ``event`` as
-``event["context"]``) rather than three flat top-level fields. The object carries
-the authoritative served scope and the vended credentials (see
-``tools/common/credentials_context.py`` for the shape).
+Wire contract: the interceptor propagates the authoritative scope and the vended
+credentials as four custom request HEADERS, which the Gateway delivers to the
+Lambda inside the CLIENT CONTEXT at
+``context.client_context.custom["bedrockAgentCorePropagatedHeaders"]`` (see
+``tools/common/credentials_context.py`` for the names and the validation). The
+Lambda ``event`` carries only the model-supplied tool arguments, so the tool's
+declared ``inputSchema`` is the whole of its contract.
 
-The tool reads the served scope via :func:`served_scope_from_event` and builds a
-boto3 session from ``context["tenant_credentials"]`` via
-:func:`documents_table_from_event`, mapping the three snake_case fields onto the
-boto3 ``Session`` keyword arguments ``aws_access_key_id`` /
-``aws_secret_access_key`` / ``aws_session_token`` by name. Both readers fail
-closed (raise :class:`ScopedCredentialsError`) on a missing/malformed ``context``
-and NEVER fall back to the tool's execution role or the default credential chain.
+The tool reads the served scope via :func:`served_scope_from_context` and builds a
+boto3 DynamoDB resource via :func:`documents_table_from_context`, which maps the
+three credential headers onto the boto3 ``Session`` keyword arguments
+``aws_access_key_id`` / ``aws_secret_access_key`` / ``aws_session_token`` by name.
+Both readers fail closed (raise :class:`ScopedCredentialsError`) on
+missing/malformed propagated headers and NEVER fall back to the tool's execution
+role or the default credential chain.
+
+Neither reader accepts the ``event``. That is the point: a credential in the body
+would be one the MODEL could have written, and removing the parameter makes its
+absence a property of the signature rather than a rule to remember.
 
 Those three credential fields are passed to ``Session.resource()`` rather than to
 a fresh ``Session(...)``: a per-thread, CREDENTIAL-FREE session is reused as a
@@ -26,12 +32,13 @@ and resource model parsing without ever sharing a tenant-bound object. See the
 "Credential-free session factory" block below for the safety argument and the
 thread-scope decision.
 
-Module split: the *context parsing and validation* half of this module lives in
+Module split: the *header parsing and validation* half of this module lives in
 ``tools/common/credentials_context.py``
-(:func:`validated_context`, :func:`served_scope_from_event`,
-:class:`ScopedCredentialsError`, and the ``context`` field constants). This file
-remains the *table-builder entry point* and re-exports those names so existing
-``from common.scoped_credentials import ...`` call sites keep working.
+(:func:`propagated_headers`, :func:`served_scope_from_context`,
+:func:`session_kwargs_from_context`, :class:`ScopedCredentialsError`, and the
+header-name constants). This file remains the *table-builder entry point* and
+re-exports the error type and the scope reader so a caller can import either from
+one place.
 
 Trust boundary — why the tool does not assume the role itself:
     The obvious alternative is for each tool Lambda to call ``sts:AssumeRole``
@@ -72,12 +79,10 @@ AWS documentation references:
       https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_examples_dynamodb_items.html
 
 Functions:
-    served_scope_from_event: (re-exported from ``credentials_context``) return the
-        authoritative served scope read from ``event["context"]["served_scope"]``.
-    documents_table_from_event: Build a DynamoDB Table from the vended credentials
-        carried in ``event["context"]["tenant_credentials"]``.
-    context_credentials_from_event: Convenience reader returning both the table
-        and the served scope (delegates to the two functions above).
+    served_scope_from_context: (re-exported from ``credentials_context``) return
+        the authoritative served scope read from the propagated headers.
+    documents_table_from_context: Build a DynamoDB Table from the vended
+        credentials carried in the propagated headers.
 """
 
 from __future__ import annotations
@@ -91,20 +96,17 @@ import boto3
 # Context parsing/validation half of the tool credentials module (kept in its own
 # file so each module stays small). Re-exported below so existing call sites that do
 # ``from common.scoped_credentials import ScopedCredentialsError`` /
-# ``served_scope_from_event`` keep resolving from this module.
+# ``served_scope_from_context`` keep resolving from this module.
 from common.credentials_context import (
-    CONTEXT_CRED_TO_SESSION_KWARG,
-    TENANT_CREDENTIALS_KEY,
     ScopedCredentialsError,
-    served_scope_from_event,
-    validated_context,
+    served_scope_from_context,
+    session_kwargs_from_context,
 )
 
 __all__ = [
     "ScopedCredentialsError",
-    "served_scope_from_event",
-    "documents_table_from_event",
-    "context_credentials_from_event",
+    "served_scope_from_context",
+    "documents_table_from_context",
     "reset_factory_session",
 ]
 
@@ -195,43 +197,44 @@ def _require_env(name: str) -> str:
     return value
 
 
-def documents_table_from_event(event: dict[str, Any]) -> Any:
-    """Build a Documents table bound to the vended ``context`` credentials.
+def documents_table_from_context(lambda_context: Any) -> Any:
+    """Build a Documents table bound to the propagated credential headers.
 
-    Reads ``event["context"]["tenant_credentials"]`` — the credentials the REQUEST
-    interceptor vended and injected — and maps its three snake_case fields onto the
-    boto3 ``Session`` keyword arguments by name:
-    ``access_key_id``→``aws_access_key_id``,
-    ``secret_access_key``→``aws_secret_access_key``,
-    ``session_token``→``aws_session_token``. The Documents ``Table`` is bound by
-    name via ``DOCUMENTS_TABLE_NAME``.
+    Reads the credentials from
+    ``lambda_context.client_context.custom["bedrockAgentCorePropagatedHeaders"]``
+    — the headers the REQUEST interceptor propagated — and maps the three
+    credential headers onto the boto3 ``Session`` keyword arguments by name:
+    ``x-tvm-access-key-id``→``aws_access_key_id``,
+    ``x-tvm-secret-access-key``→``aws_secret_access_key``,
+    ``x-tvm-session-token``→``aws_session_token``. The Documents ``Table`` is bound
+    by name via ``DOCUMENTS_TABLE_NAME``.
 
     All DynamoDB access through the returned table therefore uses the scoped,
     partition-confined credentials the interceptor vended — the tool performs NO
     ``AssumeRole`` and uses NONE of its own execution-role permissions (it holds
-    no DynamoDB grant). On a missing/malformed ``context`` the tool fails closed
-    and NEVER falls back to its execution role or the default credential chain.
+    no DynamoDB grant). On missing/malformed propagated headers the tool fails
+    closed and NEVER falls back to its execution role or the default credential
+    chain.
+
+    This reader deliberately does NOT accept the Lambda ``event``. A reader that
+    could still find a credential in the body would be a path to a credential the
+    MODEL could have written; removing the parameter makes the absence of that
+    path a property of the signature rather than a rule to remember.
 
     Args:
-        event: The Lambda event (the tool's ``inputSchema`` properties plus the
-            interceptor-injected ``context`` object).
+        lambda_context: The Lambda context object, carrying the propagated
+            headers in its client context.
 
     Returns:
         A boto3 DynamoDB ``Table`` resource confined to the vended scope.
 
     Raises:
-        ScopedCredentialsError: If the injected ``context`` is missing or
-            malformed, or if ``DOCUMENTS_TABLE_NAME`` is unset. The caller
+        ScopedCredentialsError: If the propagated credential headers are missing
+            or malformed, or if ``DOCUMENTS_TABLE_NAME`` is unset. The caller
             surfaces a generic error and does NOT fall back to any other
             credential source.
     """
-    context = validated_context(event)
-    creds = context[TENANT_CREDENTIALS_KEY]
-
-    session_kwargs = {
-        session_kwarg: creds[field]
-        for field, session_kwarg in CONTEXT_CRED_TO_SESSION_KWARG.items()
-    }
+    session_kwargs = session_kwargs_from_context(lambda_context)
 
     table_name = _require_env("DOCUMENTS_TABLE_NAME")
 
@@ -239,10 +242,11 @@ def documents_table_from_event(event: dict[str, Any]) -> Any:
     # session, passing the VENDED credentials at resource-creation time. The
     # session supplies only the cached (tenant-independent) service and resource
     # models; the credentials — and therefore the tenant scope of every call made
-    # through the returned Table — come from this request's `context` alone.
+    # through the returned Table — come from this request's propagated headers
+    # alone.
     #
-    # Note on fail-closed: `validated_context` above has already raised for a
-    # missing or malformed context, so this line is unreachable without a
+    # Note on fail-closed: `session_kwargs_from_context` above has already raised
+    # for missing or malformed headers, so this line is unreachable without a
     # complete set of vended credentials. That ordering is load-bearing. If
     # `session_kwargs` could ever arrive empty here, the factory session would
     # silently fall back to the DEFAULT CREDENTIAL CHAIN (the tool's execution
@@ -256,42 +260,3 @@ def documents_table_from_event(event: dict[str, Any]) -> Any:
         .Table(table_name)
     )
 
-
-def context_credentials_from_event(event: dict[str, Any]) -> tuple[Any, str]:
-    """Return both the Documents table and the served scope from ``context``.
-
-    Convenience reader that combines :func:`documents_table_from_event` and
-    :func:`served_scope_from_event`. It reads the single nested ``context`` object
-    the REQUEST interceptor injects at ``arguments["context"]`` (mapped into the
-    Lambda ``event``)::
-
-        event["context"]["served_scope"]                     -> served scope
-        event["context"]["tenant_credentials"]["access_key_id"]
-        event["context"]["tenant_credentials"]["secret_access_key"]
-        event["context"]["tenant_credentials"]["session_token"]
-
-    Introduced as a convenience reader; it simply delegates to the two finalized
-    readers so the fail-closed validation lives in one place. The tool handlers
-    call :func:`served_scope_from_event` and :func:`documents_table_from_event`
-    directly, so this wrapper may eventually be retired.
-
-    Both delegates fail closed: if the ``context`` object is missing/non-object,
-    the served scope is not a non-empty string, or the ``tenant_credentials``
-    object is missing or incomplete, they raise :class:`ScopedCredentialsError`
-    so the tool surfaces a generic error and NEVER falls back to its own execution
-    role or the default credential chain.
-
-    Args:
-        event: The Lambda event (the tool's declared ``inputSchema`` properties
-            plus the interceptor-injected ``context`` object).
-
-    Returns:
-        A ``(table, served_scope)`` tuple: a boto3 DynamoDB ``Table`` resource
-        bound to the vended, partition-confined credentials, and the authoritative
-        served scope string read from the context.
-
-    Raises:
-        ScopedCredentialsError: If the injected ``context`` is missing/malformed
-            or ``DOCUMENTS_TABLE_NAME`` is unset.
-    """
-    return documents_table_from_event(event), served_scope_from_event(event)

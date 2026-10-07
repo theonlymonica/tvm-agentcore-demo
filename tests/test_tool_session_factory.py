@@ -46,7 +46,16 @@ import pytest
 from common import scoped_credentials as tool_scoped_credentials
 from common.scoped_credentials import (
     ScopedCredentialsError,
-    documents_table_from_event,
+    documents_table_from_context,
+)
+from header_context import (
+    ACCESS_KEY_ID_HEADER,
+    SECRET_ACCESS_KEY_HEADER,
+    SERVED_SCOPE_HEADER,
+    SESSION_TOKEN_HEADER,
+    headerless_context,
+    lambda_context,
+    no_client_context,
 )
 
 # ---------------------------------------------------------------------------
@@ -130,26 +139,28 @@ def log(monkeypatch: pytest.MonkeyPatch, scoped_env: dict[str, str]) -> _Log:
     return recorder
 
 
-def _event(index: int = 0) -> dict[str, Any]:
-    """Build a valid tool event carrying a complete injected ``context``.
+def _event(index: int = 0) -> Any:
+    """Build a Lambda CONTEXT carrying a complete propagated credential header set.
+
+    Named ``_event`` no longer describes what it returns, but the name is kept so
+    the migration to the header channel shows up as a change of SOURCE rather than
+    a rewrite of every call site: what each test asserts is unchanged.
 
     Args:
-        index: Distinguishes one caller's credentials from another's.
+        index: Distinguishes one caller's credentials from another's, so the
+            cross-credential tests can tell whose credentials reached ``resource``.
 
     Returns:
-        A Lambda event with ``doc_id`` and a well-formed ``context``.
+        A Lambda context object carrying the four propagated headers.
     """
-    return {
-        "doc_id": f"PAY-{index:03d}",
-        "context": {
-            "served_scope": f"scope-{index}",
-            "tenant_credentials": {
-                "access_key_id": f"AKIA{index}",
-                "secret_access_key": f"secret{index}",
-                "session_token": f"token{index}",
-            },
-        },
-    }
+    return lambda_context(
+        {
+            SERVED_SCOPE_HEADER: f"scope-{index}",
+            ACCESS_KEY_ID_HEADER: f"AKIA{index}",
+            SECRET_ACCESS_KEY_HEADER: f"secret{index}",
+            SESSION_TOKEN_HEADER: f"token{index}",
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +174,7 @@ def test_factory_session_is_built_without_credentials(log: _Log) -> None:
     This is the property that makes reuse safe: a session holding credentials
     would be shared tenant state.
     """
-    documents_table_from_event(_event())
+    documents_table_from_context(_event())
 
     assert len(log.sessions) == 1
     assert log.sessions[0].construction_kwargs == {}
@@ -176,7 +187,7 @@ def test_credentials_are_passed_per_request_to_resource(
 
     Exact equality, so no extra field (``Expiration``, scope, junk) rides along.
     """
-    table = documents_table_from_event(_event(7))
+    table = documents_table_from_context(_event(7))
 
     assert len(log.resource_calls) == 1
     call = log.resource_calls[0]
@@ -195,8 +206,8 @@ def test_session_is_reused_but_resource_is_per_request(log: _Log) -> None:
     The session is the cacheable, tenant-agnostic half; the resource is bound to
     one tenant's credentials and must never be reused.
     """
-    first = documents_table_from_event(_event(1))
-    second = documents_table_from_event(_event(2))
+    first = documents_table_from_context(_event(1))
+    second = documents_table_from_context(_event(2))
 
     # One session construction for three requests-worth of work.
     assert len(log.sessions) == 1
@@ -215,54 +226,55 @@ def test_session_is_reused_but_resource_is_per_request(log: _Log) -> None:
 
 
 @pytest.mark.parametrize(
-    "event",
+    "bad_context",
     [
-        pytest.param({"doc_id": "PAY-001"}, id="context-missing"),
-        pytest.param({"doc_id": "PAY-001", "context": None}, id="context-none"),
-        pytest.param({"doc_id": "PAY-001", "context": "nope"}, id="context-not-object"),
-        pytest.param({"doc_id": "PAY-001", "context": {}}, id="context-empty"),
+        pytest.param(no_client_context(), id="no-client-context"),
+        pytest.param(headerless_context(), id="no-propagated-headers"),
+        pytest.param(lambda_context(None), id="headers-none"),
+        pytest.param(lambda_context("nope"), id="headers-not-object"),
+        pytest.param(lambda_context({}), id="headers-empty"),
         pytest.param(
-            {"doc_id": "PAY-001", "context": {"served_scope": "s"}},
+            lambda_context({SERVED_SCOPE_HEADER: "s"}),
             id="credentials-missing",
         ),
         pytest.param(
-            {
-                "doc_id": "PAY-001",
-                "context": {
-                    "served_scope": "s",
-                    "tenant_credentials": {"access_key_id": "AKIA"},
-                },
-            },
+            lambda_context(
+                {SERVED_SCOPE_HEADER: "s", ACCESS_KEY_ID_HEADER: "AKIA"}
+            ),
             id="credentials-incomplete",
         ),
         pytest.param(
-            {
-                "doc_id": "PAY-001",
-                "context": {
-                    "served_scope": "",
-                    "tenant_credentials": {
-                        "access_key_id": "AKIA",
-                        "secret_access_key": "s",
-                        "session_token": "t",
-                    },
-                },
-            },
+            lambda_context(
+                {
+                    SERVED_SCOPE_HEADER: "",
+                    ACCESS_KEY_ID_HEADER: "AKIA",
+                    SECRET_ACCESS_KEY_HEADER: "s",
+                    SESSION_TOKEN_HEADER: "t",
+                }
+            ),
             id="scope-empty",
         ),
     ],
 )
 def test_malformed_context_never_reaches_resource(
-    log: _Log, event: dict[str, Any]
+    log: _Log, bad_context: Any
 ) -> None:
-    """A malformed ``context`` raises BEFORE any resource is built.
+    """Malformed propagated headers raise BEFORE any resource is built.
 
     Validation must run first. If it did not, the credential kwargs would be
     absent from the ``resource()`` call and the factory session would silently
     fall back to the DEFAULT CREDENTIAL CHAIN — the tool's execution role —
     turning a clear contract violation into an opaque ``AccessDenied``.
+
+    The ``no-client-context`` case is new with the header channel and is the one
+    that matters most: it is what a DIRECT (non-Gateway) invocation of the tool
+    produces. Someone calling the tool Lambda straight gets no client context at
+    all, and must therefore get no credentials — not the execution role's.
+
+    Validates: fail closed, no fallback.
     """
     with pytest.raises(ScopedCredentialsError):
-        documents_table_from_event(event)
+        documents_table_from_context(bad_context)
 
     # The decisive assertion: no resource was created, so no call could have been
     # made under any credentials, vended or ambient.
@@ -293,8 +305,8 @@ def test_each_thread_gets_its_own_session(log: _Log) -> None:
             tool_scoped_credentials._factory_session(),
             tool_scoped_credentials._factory_session(),
         ]
-        documents_table_from_event(_event(index))
-        documents_table_from_event(_event(index))
+        documents_table_from_context(_event(index))
+        documents_table_from_context(_event(index))
         with seen_lock:
             seen[index] = sessions
 
@@ -332,7 +344,7 @@ def test_concurrent_requests_do_not_cross_credentials(log: _Log) -> None:
 
     def worker(index: int) -> None:
         start.wait()
-        table = documents_table_from_event(_event(index))
+        table = documents_table_from_context(_event(index))
         with results_lock:
             results[index] = table.credentials
 

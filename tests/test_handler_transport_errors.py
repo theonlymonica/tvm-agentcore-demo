@@ -46,6 +46,13 @@ import search_documents.handler as search_module
 from read_document.handler import handler as read_document_handler
 from reply.handler import handler as reply_handler
 from search_documents.handler import handler as search_documents_handler
+from header_context import (
+    ACCESS_KEY_ID_HEADER,
+    SECRET_ACCESS_KEY_HEADER,
+    SERVED_SCOPE_HEADER,
+    SESSION_TOKEN_HEADER,
+    lambda_context,
+)
 from tests.conftest import SERVED_SCOPE
 
 _ENDPOINT = "https://dynamodb.us-east-1.amazonaws.com"
@@ -69,16 +76,21 @@ _TRANSPORT_ERRORS = [
 ]
 
 
-def _context(scope: str = SERVED_SCOPE) -> dict[str, Any]:
-    """Return a well-formed injected ``context`` object for ``scope``."""
-    return {
-        "served_scope": scope,
-        "tenant_credentials": {
-            "access_key_id": _ACCESS_KEY_ID,
-            "secret_access_key": _SECRET_ACCESS_KEY,
-            "session_token": _SESSION_TOKEN,
-        },
-    }
+def _context(scope: str = SERVED_SCOPE) -> Any:
+    """Return a Lambda CONTEXT carrying the propagated credential headers.
+
+    Under the F9 header channel the scope and credentials no longer ride in the
+    event: they arrive on the Lambda client context. The helper keeps its name and
+    signature so these tests still read as "a well-formed request for this scope".
+    """
+    return lambda_context(
+        {
+            SERVED_SCOPE_HEADER: scope,
+            ACCESS_KEY_ID_HEADER: _ACCESS_KEY_ID,
+            SECRET_ACCESS_KEY_HEADER: _SECRET_ACCESS_KEY,
+            SESSION_TOKEN_HEADER: _SESSION_TOKEN,
+        }
+    )
 
 
 class _FailingTable:
@@ -111,7 +123,7 @@ def _install_failing_table(
 ) -> _FailingTable:
     """Point ``module``'s table builder at a stub that raises ``error``."""
     table = _FailingTable(error)
-    monkeypatch.setattr(module, "documents_table_from_event", lambda _event: table)
+    monkeypatch.setattr(module, "documents_table_from_context", lambda _ctx: table)
     return table
 
 
@@ -155,7 +167,7 @@ class TestSearchDocumentsTransportFailure:
         table = _install_failing_table(monkeypatch, search_module, error)
 
         result = search_documents_handler(
-            {"query": "refund", "context": _context()}, None
+            {"query": "refund"}, _context()
         )
 
         assert table.calls == 1
@@ -175,7 +187,7 @@ class TestSearchDocumentsTransportFailure:
         )
 
         result = search_documents_handler(
-            {"query": "refund", "context": _context()}, None
+            {"query": "refund"}, _context()
         )
 
         rendered = repr(result)
@@ -204,7 +216,7 @@ class TestReadDocumentTransportFailure:
         table = _install_failing_table(monkeypatch, read_document_module, error)
 
         result = read_document_handler(
-            {"doc_id": "DOC-0001", "context": _context()}, None
+            {"doc_id": "DOC-0001"}, _context()
         )
 
         assert table.calls == 1
@@ -230,8 +242,8 @@ class TestReplyTransportFailure:
         table = _install_failing_table(monkeypatch, reply_module, error)
 
         result = reply_handler(
-            {"doc_id": "DOC-0001", "body": "Refund processed.", "context": _context()},
-            None,
+            {"doc_id": "DOC-0001", "body": "Refund processed."},
+            _context(),
         )
 
         assert table.calls == 1
@@ -254,8 +266,8 @@ class TestReplyTransportFailure:
         )
 
         result = reply_handler(
-            {"doc_id": "DOC-0001", "body": "Refund processed.", "context": _context()},
-            None,
+            {"doc_id": "DOC-0001", "body": "Refund processed."},
+            _context(),
         )
 
         assert result == {"error": reply_module._GENERIC_ERROR}

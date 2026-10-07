@@ -12,15 +12,16 @@ Behavior:
 - ``tools/call`` for a tool OUTSIDE the scoped set: pass through UNCHANGED.
 - ``tools/call`` for a scoped tool (``read_document``, ``search_documents``,
   ``reply``): derive ``served_scope`` from the validated Authorization JWT, vend
-  scoped credentials, and write a SINGLE ``context`` object at
-  ``params.arguments["context"]`` (carrying the authoritative ``served_scope``
-  and the ``tenant_credentials``) — any value already present at that key is
-  OVERWRITTEN without being read — then return the modified request in
-  ``transformedGatewayRequest.body``. No flat credential fields and no top-level
-  ``served_scope`` argument are written on any path.
-- FAIL CLOSED: when no verifiable ``served_scope`` can be derived, return a
-  ``transformedGatewayResponse`` whose JSON-RPC result has ``isError`` true, a
-  GENERIC message, and NO scope detail — so no document read occurs.
+  scoped credentials, and propagate BOTH as custom request HEADERS in
+  ``mcp.transformedGatewayRequest.headers`` — the request BODY is forwarded
+  unchanged, so it carries only the model-supplied tool arguments. Nothing is
+  written into ``params`` or ``arguments`` on any path, and no credential is part
+  of any tool's ``inputSchema``.
+- FAIL CLOSED: when no verifiable ``served_scope`` can be derived, when the vend
+  fails, or when a credential cannot be expressed as a header (over the Gateway's
+  4096-byte per-value limit), return a ``transformedGatewayResponse`` whose
+  JSON-RPC result has ``isError`` true, a GENERIC message, and NO scope detail —
+  so no document read occurs.
 
 Security:
     The Authorization header and the JWT are NEVER logged. The
@@ -56,12 +57,17 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 from interceptor.audit_record import build_audit_record, emit_audit_record
+from interceptor.credential_headers import (
+    MAX_HEADER_VALUE_BYTES,
+    CredentialHeaderError,
+    build_credential_headers,
+    header_size_report,
+)
 from interceptor.handler_envelopes import allow, short_circuit_error
 from interceptor.jwt_claims import verified_identity_from_authorization
 from interceptor.scoped_credentials import (
     READ_ACTIONS,
     WRITE_ACTIONS,
-    build_tenant_context,
     vend_scoped_credentials,
 )
 from interceptor.tool_classifier import (
@@ -280,18 +286,26 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         )
         return _short_circuit_error(body.get("id"), _GENERIC_ERROR_MESSAGE)
 
-    # --- Single `context` wire contract for ALL scoped tools -------------------
-    # Write EXACTLY one new key — `context` — at arguments["context"] for every
-    # scoped tool (read_document, search_documents, reply). The object carries
-    # served_scope + tenant_credentials (build_tenant_context). No flat
-    # credential fields and no top-level `served_scope` argument are written on
-    # any path, and the model-supplied arguments (doc_id /
-    # query / body) are left untouched. Any value already present at
-    # arguments["context"] (e.g. a model-supplied one) is OVERWRITTEN without
-    # being read and without being logged — this is a plain assign, so
-    # the prior value is never inspected. NEVER logs the context object or any
-    # credential value.
-    arguments["context"] = build_tenant_context(served_scope, creds)
+    # --- Credential HEADER channel for ALL scoped tools -----------------------
+    # The scope and the vended credentials are propagated as four custom request
+    # headers; the request BODY is forwarded unchanged, so it carries only the
+    # model-supplied arguments (doc_id / query / body). Nothing is written into
+    # `params` or `arguments` on any path, so no credential is part of any tool's
+    # inputSchema and the model cannot see, name or echo one. A client that sends
+    # its own copy of one of these headers is OVERRIDDEN, because the Gateway gives
+    # interceptor-provided values precedence over client-provided ones.
+    # Fails CLOSED if a value will not fit the Gateway's per-value limit: a
+    # truncated credential would reach the tool as an unusable one and surface as
+    # an opaque AccessDenied. NEVER logs a header value or any credential.
+    try:
+        credential_headers = build_credential_headers(served_scope, creds)
+    except CredentialHeaderError as exc:
+        logger.info(
+            "credential headers could not be built for tool=%s (%s); failing closed",
+            tool,
+            exc,
+        )
+        return _short_circuit_error(body.get("id"), _GENERIC_ERROR_MESSAGE)
 
     # Latency instrumentation (observability only; no secret logged). assume_ms
     # is the wall-clock of the single sts:AssumeRole vend. There is no cache and
@@ -303,17 +317,26 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         _assume_ms,
     )
 
-    params["arguments"] = arguments
-    body["params"] = params
-    # Evidence log: scalar fields only — the tool name and the served-scope
-    # value. No model_supplied/_SCOPE_ARG, no object, no credential.
+    # Size measurement: byte LENGTHS only, never values. AWS does not document a
+    # maximum STS session-token size, so whether a real token fits the Gateway's
+    # per-value limit is something that has to be observed rather than assumed.
     logger.info(
-        "context injection: tool=%s served_scope=%s",
+        "cred_header_bytes tool=%s limit=%d sizes=%s",
         tool,
-        served_scope,
+        MAX_HEADER_VALUE_BYTES,
+        header_size_report(credential_headers),
     )
 
-    return _allow(body)
+    # Evidence log: scalar fields only — the tool name, the served-scope value and
+    # the header COUNT. No object, no header value, no credential.
+    logger.info(
+        "header injection: tool=%s served_scope=%s headers=%d",
+        tool,
+        served_scope,
+        len(credential_headers),
+    )
+
+    return _allow(body, headers=credential_headers)
 
 
 # ---------------------------------------------------------------------------

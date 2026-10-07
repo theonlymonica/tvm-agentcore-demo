@@ -1,157 +1,226 @@
-"""
-Tool-side parsing and fail-closed validation of the injected ``context`` object.
+"""Tool-side parsing and fail-closed validation of the propagated credential HEADERS.
 
-Wire contract: the REQUEST interceptor injects a single UNDECLARED ``context``
-object at ``arguments["context"]`` (mapped into the Lambda ``event`` as
-``event["context"]``) rather than three flat top-level fields. The object carries
-the authoritative served scope and the vended credentials::
+Wire contract (header channel)
+------------------------------
+The REQUEST interceptor propagates the authoritative scope and the vended STS
+credentials as four custom request HEADERS. The Gateway delivers them to a Lambda
+target inside the Lambda CLIENT CONTEXT, not in the event::
 
-    event["context"] = {
-        "served_scope": "<scope>",
-        "tenant_credentials": {
-            "access_key_id": "...",
-            "secret_access_key": "...",
-            "session_token": "...",
-        },
+    context.client_context.custom["bedrockAgentCorePropagatedHeaders"] = {
+        "x-tvm-served-scope":       "<scope>",
+        "x-tvm-access-key-id":      "...",
+        "x-tvm-secret-access-key":  "...",
+        "x-tvm-session-token":      "...",
     }
 
-This module owns the *context parsing and validation* half of the tool
-credentials module. It was split out of ``tools/common/scoped_credentials.py``
-when the combined module grew past ~350 lines; the table-builder entry points
-(:func:`documents_table_from_event`, :func:`context_credentials_from_event`)
-remain in ``scoped_credentials.py`` and import :func:`validated_context` and
-:func:`served_scope_from_event` from here.
+The Lambda ``event`` therefore carries ONLY the model-supplied tool arguments
+(``doc_id`` / ``query`` / ``body``) — the tool's declared ``inputSchema`` is the
+whole of its contract.
 
-Fail-closed contract: a missing or malformed ``context`` raises
-:class:`ScopedCredentialsError`. Callers surface a generic, detail-free error and
-NEVER fall back to the tool's execution role or the default credential chain.
+Why these readers do not take the event
+---------------------------------------
+This module previously read ``event["context"]["tenant_credentials"]``. Those
+readers are GONE rather than kept as a fallback, and the functions here do not
+accept an ``event`` parameter at all. That is deliberate: a reader that can still
+find a credential in the body is a path, even when nothing is supposed to use it,
+and a tool that accepts a body-supplied credential accepts one the MODEL could
+have written. Removing the parameter makes "the credential cannot come from the
+body" a property of the signature instead of a rule someone has to keep.
+
+``tests/test_no_body_credential_path.py`` pins this by scanning the tool sources:
+no module may name the retired ``tenant_credentials`` key.
+
+Why the lookup is case-insensitive
+----------------------------------
+HTTP field names are case-insensitive (RFC 9110 §5.1) and HTTP/2 mandates
+lowercase on the wire (RFC 9113 §8.2). The Gateway negotiates HTTP/2, so a header
+sent as ``X-Tvm-Session-Token`` can arrive lowercased. The interceptor sends
+lowercase names and the measured round trip preserved them exactly, but a
+case-sensitive read here would fail closed on a valid request if that ever
+changed — the same trap already documented for ``Authorization`` and
+``Mcp-Session-Id`` on the interceptor side.
+
+Fail-closed contract: a missing client context, a missing propagated-headers map,
+or any missing/empty header raises :class:`ScopedCredentialsError`. Callers
+surface a generic, detail-free error and NEVER fall back to the tool's execution
+role (which holds no DynamoDB grant) or the default credential chain.
 
 Security:
-    This module NEVER logs the event-supplied scope or credentials, and its error
-    message names no scope, credential field, or value.
+    This module NEVER logs the scope, a header name/value, or a credential, and
+    its error message names none of them.
 
-AWS documentation references:
-    - STS ``Credentials`` shape (AccessKeyId, SecretAccessKey, SessionToken) —
-      the source field names the interceptor maps into ``tenant_credentials``:
+AWS documentation references (verified via the AWS Documentation MCP server, per
+the workspace ``aws-docs-lookup`` rule):
+    - Header propagation with Gateway (allowlist, interceptor-over-client
+      precedence, 4096-byte per-value and 10-header-per-target limits):
+      https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-headers.html
+    - Lambda target context object. NOTE: this page documents the six
+      ``bedrockAgentCore*`` fields and does NOT mention
+      ``bedrockAgentCorePropagatedHeaders``; that key is UNDOCUMENTED in the
+      service reference and was established by live measurement against a
+      deployed gateway. Treat it as observed behaviour that could change, and
+      re-verify it before relying on it:
+      https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-add-target-lambda.html
+    - STS ``Credentials`` shape (AccessKeyId, SecretAccessKey, SessionToken):
       https://docs.aws.amazon.com/STS/latest/APIReference/API_Credentials.html
-    - boto3/AWS credential field names (``aws_access_key_id``,
-      ``aws_secret_access_key``, ``aws_session_token``) the three
-      ``tenant_credentials`` snake_case fields map onto for a session:
+    - boto3 credential keyword names the three fields map onto:
       https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/credentials.html
 
 Constants:
-    CONTEXT_KEY / SERVED_SCOPE_KEY / TENANT_CREDENTIALS_KEY: the ``context``
-        object key names.
-    CONTEXT_CRED_TO_SESSION_KWARG: mapping of the three snake_case
-        ``tenant_credentials`` fields onto the boto3 ``Session`` keyword
-        arguments; its keys are also the completeness set.
+    PROPAGATED_HEADERS_KEY: the ``client_context.custom`` key the Gateway uses.
+    SERVED_SCOPE_HEADER / HEADER_TO_SESSION_KWARG: the header names, and the
+        mapping of the three credential headers onto the boto3 ``Session``
+        keyword arguments.
 
 Functions:
-    validated_context: Return ``event["context"]`` after fail-closed validation.
-    served_scope_from_event: Return the authoritative served scope string.
+    propagated_headers: Return the propagated-header map, validated.
+    served_scope_from_context: Return the authoritative served scope.
+    session_kwargs_from_context: Return the boto3 credential keyword arguments.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-# ---------------------------------------------------------------------------
-# `context` wire contract. The REQUEST interceptor writes a single UNDECLARED
-# `context` object at arguments["context"] (mapped into the Lambda event as
-# event["context"]); see the module docstring for the shape.
-# ---------------------------------------------------------------------------
-CONTEXT_KEY = "context"
-SERVED_SCOPE_KEY = "served_scope"
-TENANT_CREDENTIALS_KEY = "tenant_credentials"
+#: The ``client_context.custom`` key under which the Gateway delivers the
+#: allowlisted request headers to a Lambda target. Established by measurement, not
+#: by the service reference — see the module docstring.
+PROPAGATED_HEADERS_KEY = "bedrockAgentCorePropagatedHeaders"
 
-# Mapping of the three snake_case tenant-credential fields (as written inside
-# context["tenant_credentials"]) onto the boto3 Session keyword arguments they
-# populate, by name. This mapping's KEYS are also the completeness set for the
-# validation below: all three must be present as non-empty strings.
-CONTEXT_CRED_TO_SESSION_KWARG: dict[str, str] = {
-    "access_key_id": "aws_access_key_id",
-    "secret_access_key": "aws_secret_access_key",
-    "session_token": "aws_session_token",
+#: Header carrying the authoritative, JWT-derived scope. MUST stay in sync with
+#: ``interceptor/credential_headers.py``; tests/test_header_contract_parity.py
+#: pins the two sides to each other.
+SERVED_SCOPE_HEADER = "x-tvm-served-scope"
+
+#: Mapping of the three credential headers onto the boto3 ``Session`` keyword
+#: arguments they populate. This mapping's KEYS are also the completeness set for
+#: the fail-closed validation: all three must be present as non-empty strings.
+HEADER_TO_SESSION_KWARG: dict[str, str] = {
+    "x-tvm-access-key-id": "aws_access_key_id",
+    "x-tvm-secret-access-key": "aws_secret_access_key",
+    "x-tvm-session-token": "aws_session_token",
 }
+
+#: Single generic message used for EVERY failure branch, so the failure mode
+#: cannot be distinguished by an attacker probing which part was malformed.
+_GENERIC = "propagated credential context is missing or malformed"
 
 
 class ScopedCredentialsError(RuntimeError):
-    """Raised when the interceptor-injected ``context`` is missing or malformed.
+    """Raised when the propagated credential headers are missing or malformed.
 
     Signals that the tool has no scoped credentials (or no served scope) to use.
     The tool handler surfaces a generic error and NEVER falls back to its own
-    execution role (which holds no DynamoDB permission anyway) or the default
-    credential chain.
+    execution role (which holds no DynamoDB permission) or the default credential
+    chain.
     """
 
 
-def validated_context(event: dict[str, Any]) -> dict[str, Any]:
-    """Return the injected ``context`` object after fail-closed validation.
-
-    Enforces the wire contract on ``event["context"]``. It raises
-    :class:`ScopedCredentialsError` (never returning) when ANY of the following
-    holds, so the caller fails closed and NEVER falls back to the tool's execution
-    role or the default credential chain:
-
-      * ``event["context"]`` is missing, or is not an object (``dict``);
-      * ``context["served_scope"]`` is not a non-empty string;
-      * ``context["tenant_credentials"]`` is not a *complete* object — meaning a
-        ``dict`` carrying non-empty string values for ALL three of
-        ``access_key_id``, ``secret_access_key`` and ``session_token``.
-
-    The error message names no scope, credential field, or value (the fail-closed
-    path is deliberately detail-free); a single generic message covers every branch
-    so the failure mode cannot be distinguished by an attacker.
+def _custom_map(lambda_context: Any) -> dict[str, Any]:
+    """Return ``client_context.custom`` as a dict, or raise.
 
     Args:
-        event: The Lambda event, expected to carry ``event["context"]``.
+        lambda_context: The Lambda context object passed to the handler.
 
     Returns:
-        The validated ``context`` dict (its ``served_scope`` and
-        ``tenant_credentials`` are guaranteed well-formed).
+        The ``custom`` dict from the Lambda client context.
 
     Raises:
-        ScopedCredentialsError: If the injected context is missing or malformed.
+        ScopedCredentialsError: If there is no client context, or its ``custom``
+            attribute is absent or not a dict. Attribute access is guarded with
+            ``getattr`` because the client context is absent entirely on a direct
+            (non-Gateway) invocation, and a raw ``AttributeError`` would escape
+            the handler as a 5xx instead of the generic tool error.
     """
-    context = event.get(CONTEXT_KEY)
-    if not isinstance(context, dict):
-        raise ScopedCredentialsError("injected context is missing or malformed")
-
-    raw_scope = context.get(SERVED_SCOPE_KEY)
-    if not (isinstance(raw_scope, str) and raw_scope.strip()):
-        raise ScopedCredentialsError("injected context is missing or malformed")
-
-    creds = context.get(TENANT_CREDENTIALS_KEY)
-    if not isinstance(creds, dict):
-        raise ScopedCredentialsError("injected context is missing or malformed")
-
-    for field in CONTEXT_CRED_TO_SESSION_KWARG:
-        value = creds.get(field)
-        if not (isinstance(value, str) and value):
-            raise ScopedCredentialsError("injected context is missing or malformed")
-
-    return context
+    client_context = getattr(lambda_context, "client_context", None)
+    if client_context is None:
+        raise ScopedCredentialsError(_GENERIC)
+    custom = getattr(client_context, "custom", None)
+    if not isinstance(custom, dict):
+        raise ScopedCredentialsError(_GENERIC)
+    return custom
 
 
-def served_scope_from_event(event: dict[str, Any]) -> str:
-    """Return the authoritative served scope from the injected ``context``.
+def propagated_headers(lambda_context: Any) -> dict[str, str]:
+    """Return the propagated request headers, lowercased and validated.
 
-    Reads ``event["context"]["served_scope"]`` — the JWT-derived scope the REQUEST
-    interceptor injected — after the full fail-closed validation. The returned
-    value is stripped of surrounding whitespace.
+    Enforces the full fail-closed contract: the client context must exist, carry a
+    ``bedrockAgentCorePropagatedHeaders`` object, and that object must hold
+    non-empty string values for the served-scope header AND all three credential
+    headers. Header names are lowercased so the caller's lookups are
+    case-insensitive with respect to what the wire delivered.
 
     Args:
-        event: The Lambda event (the tool's declared ``inputSchema`` properties
-            plus the interceptor-injected ``context`` object).
+        lambda_context: The Lambda context object passed to the handler.
 
     Returns:
-        The authoritative served scope string.
+        The propagated headers with lowercased names. Guaranteed to contain the
+        served-scope header and the three credential headers as non-empty strings.
 
     Raises:
-        ScopedCredentialsError: If the injected ``context`` is missing or
-            malformed (missing/empty ``served_scope`` or an incomplete
-            ``tenant_credentials`` object). The caller surfaces a generic error
-            and NEVER falls back to its execution role or the default chain.
+        ScopedCredentialsError: On any missing or malformed part. The message
+            names no header, scope, or value, and is identical for every branch.
     """
-    context = validated_context(event)
-    return context[SERVED_SCOPE_KEY].strip()
+    raw = _custom_map(lambda_context).get(PROPAGATED_HEADERS_KEY)
+    if not isinstance(raw, dict):
+        raise ScopedCredentialsError(_GENERIC)
+
+    headers = {
+        str(name).lower(): value
+        for name, value in raw.items()
+        if isinstance(value, str)
+    }
+
+    for required in (SERVED_SCOPE_HEADER, *HEADER_TO_SESSION_KWARG):
+        value = headers.get(required)
+        if not (isinstance(value, str) and value.strip()):
+            raise ScopedCredentialsError(_GENERIC)
+
+    return headers
+
+
+def served_scope_from_context(lambda_context: Any) -> str:
+    """Return the authoritative served scope from the propagated headers.
+
+    The value comes from the JWT the interceptor verified, carried on a channel
+    the model never writes to, so it is authoritative in a way a body field could
+    not be.
+
+    Args:
+        lambda_context: The Lambda context object passed to the handler.
+
+    Returns:
+        The served scope, stripped of surrounding whitespace.
+
+    Raises:
+        ScopedCredentialsError: If the propagated headers are missing or
+            malformed. The caller surfaces a generic error and NEVER falls back to
+            its execution role or the default chain.
+    """
+    return propagated_headers(lambda_context)[SERVED_SCOPE_HEADER].strip()
+
+
+def session_kwargs_from_context(lambda_context: Any) -> dict[str, str]:
+    """Return the boto3 credential keyword arguments from the propagated headers.
+
+    Maps the three credential headers onto ``aws_access_key_id`` /
+    ``aws_secret_access_key`` / ``aws_session_token`` by name.
+
+    Args:
+        lambda_context: The Lambda context object passed to the handler.
+
+    Returns:
+        A dict of boto3 ``Session``/``resource`` credential keyword arguments.
+        Always complete — all three keys are present with non-empty values, which
+        is what keeps the caller from ever constructing a client that would fall
+        through to the default credential chain.
+
+    Raises:
+        ScopedCredentialsError: If the propagated headers are missing or
+            malformed.
+    """
+    headers = propagated_headers(lambda_context)
+    return {
+        session_kwarg: headers[header]
+        for header, session_kwarg in HEADER_TO_SESSION_KWARG.items()
+    }

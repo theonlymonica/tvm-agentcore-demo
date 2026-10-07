@@ -81,6 +81,7 @@ from constructs import Construct
 from auth_resources import AuthResources
 # Post-creation AwsCustomResource wiring, extracted to keep this file within
 # the code-modularity line limit.
+from gateway_target_headers import allowlist_credential_headers
 from gateway_wiring import attach_policy_engine, enable_gateway_tracing
 
 
@@ -375,7 +376,7 @@ def _create_tool_targets(
         tool_fns: Dict mapping tool names to their Lambda functions.
     """
     # -- ReadDocument target --
-    agentcore.GatewayTarget.for_lambda(
+    read_document_target = agentcore.GatewayTarget.for_lambda(
         scope,
         "ReadDocumentTarget",
         gateway_target_name="ReadDocument",
@@ -406,7 +407,7 @@ def _create_tool_targets(
     )
 
     # -- SearchDocuments target --
-    agentcore.GatewayTarget.for_lambda(
+    search_documents_target = agentcore.GatewayTarget.for_lambda(
         scope,
         "SearchDocumentsTarget",
         gateway_target_name="SearchDocuments",
@@ -441,7 +442,7 @@ def _create_tool_targets(
     )
 
     # -- Reply target --
-    agentcore.GatewayTarget.for_lambda(
+    reply_target = agentcore.GatewayTarget.for_lambda(
         scope,
         "ReplyTarget",
         gateway_target_name="Reply",
@@ -484,7 +485,11 @@ def _create_tool_targets(
         ]),
     )
 
-
-
-
-
+    # All THREE tool targets allowlist the credential headers, not just one: every
+    # scoped tool is handed its own vended credentials, so a target left off this
+    # list would have the Gateway drop them and that tool would fail closed on
+    # every call. tests/test_header_contract_parity.py asserts the synthesized
+    # template carries the allowlist on each of the three.
+    allowlist_credential_headers(read_document_target, "ReadDocumentTarget")
+    allowlist_credential_headers(search_documents_target, "SearchDocumentsTarget")
+    allowlist_credential_headers(reply_target, "ReplyTarget")
