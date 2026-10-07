@@ -16,29 +16,40 @@ Why this module is duplicated from ``tools/common/scoped_credentials.py``:
     re-declared here. They MUST stay byte-for-byte equivalent to the tool-side
     copy.
 
-Credential channel (Lambda targets):
-    A Lambda target receives only the ``inputSchema`` properties as its ``event``
-    (no headers, no context credentials). ``params.arguments`` is the only
-    interceptor->Lambda-target channel, and UNDECLARED fields survive intact at
-    credential payload size. So the credentials ride as UNDECLARED
-    ``params.arguments`` fields (kept OUT of every tool ``inputSchema`` so
-    credential-shaped properties are never advertised to the model).
+Credential channel (Lambda targets): propagated request HEADERS
+    The vended credentials travel as allowlisted request headers, never in the
+    request body. The REQUEST interceptor returns them under
+    ``mcp.transformedGatewayRequest.headers``; every Lambda target allowlists the
+    four header names in ``metadataConfiguration.allowedRequestHeaders``; and the
+    tool reads them from
+    ``context.client_context.custom["bedrockAgentCorePropagatedHeaders"]``. The
+    forwarded body is deep-equal to the one the gateway received, so nothing is
+    written into ``params`` / ``arguments`` at all, and the tool-side readers do
+    not accept the ``event`` — a credential in the body is no longer expressible.
+    See ``interceptor/credential_headers.py`` and
+    ``tools/common/credentials_context.py``.
 
-    DOCUMENTED DRAWBACK (inherent to the AWS reference "Design 2" for a Lambda
-    target): credentials transit ``params.arguments``, which the gateway's vended
-    APPLICATION_LOGS ``requestBody`` would capture verbatim IF that delivery were
-    enabled — confirmed by live observation. Mitigations: a leaked credential is
-    unusable after the 60-second session-policy window
-    (``_SESSION_POLICY_TTL_SECONDS`` below), which is the real bound — the 900s
-    ``DurationSeconds`` is only the STS session floor, not the usable window (IAM
-    was observed denying a call at 98s with ~13 minutes of session left). And the
-    stack MUST NOT enable APPLICATION_LOGS request-body delivery (see
-    ``cdk/gateway_wiring.py``). The deployed stack delivers only TRACES (which
-    omit arguments), and that is enforced mechanically rather than by convention:
-    ``tests/test_synth_log_delivery.py`` fails the suite if any delivery source
-    in the synthesized template declares a logType other than TRACES. Residual
-    gap: a delivery created outside this template (in the console), or a
-    same-name overwrite, is beyond what a synth-time check can see.
+    THIS REPLACES an earlier design in which the credentials rode as undeclared
+    ``params.arguments`` fields, on the belief that a Lambda target had no header
+    channel. That belief was wrong: header propagation to a Lambda target is
+    documented and works, and the documentation describing it predates the
+    decision that avoided it. The cost of the old design was real — the gateway's
+    vended APPLICATION_LOGS copy ``requestBody`` verbatim, so enabling that
+    delivery wrote live credential values into CloudWatch.
+
+    The header channel has its own constraints, enforced rather than assumed:
+    at most 10 allowlisted headers per target (four are used), header names
+    matching ``^[a-zA-Z0-9_-]+$``, and 4096 bytes per value. A value over the cap
+    makes the interceptor FAIL CLOSED rather than truncate, because a truncated
+    credential would reach the tool as an opaque ``AccessDenied``. Measured in
+    this system, the session token is the largest value at roughly 1.2 KB.
+
+    APPLICATION_LOGS delivery is still forbidden (see ``cdk/gateway_wiring.py``
+    and ``tests/test_synth_log_delivery.py``), but no longer because of
+    credentials: those records were re-measured with the real credentials in
+    flight and carry no header name and no header value. They carry the
+    ``responseBody``, which is the tool's full answer — the whole document for a
+    read — into a log group that has one partition for the entire gateway.
 
 Security:
     This module NEVER logs the vended credentials or the Authorization header.

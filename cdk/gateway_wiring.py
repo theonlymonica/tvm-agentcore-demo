@@ -76,18 +76,43 @@ def enable_gateway_tracing(
         gateway: The Gateway whose traces are delivered.
     """
     # -----------------------------------------------------------------------
-    # CREDENTIAL-IN-PAYLOAD GUARD — DO NOT enable gateway APPLICATION_LOGS
+    # DATA-IN-PAYLOAD GUARD — DO NOT enable gateway APPLICATION_LOGS
     # request-body delivery.
     #
-    # The REQUEST interceptor vends short-lived STS credentials to the tools
-    # inside `params.arguments`, because a Lambda target has no header channel.
-    # The gateway's vended APPLICATION_LOGS carry a `requestBody` field that
-    # includes `params.arguments` VERBATIM
-    # (observability-gateway-metrics.html), so enabling APPLICATION_LOGS
-    # delivery would write those credentials into
+    # HISTORY — the original reason for this guard no longer holds. It was: the
+    # REQUEST interceptor vends short-lived STS credentials to the tools inside
+    # `params.arguments`, and the gateway's vended APPLICATION_LOGS carry a
+    # `requestBody` field that includes `params.arguments` VERBATIM
+    # (observability-gateway-metrics.html), so enabling the delivery wrote those
+    # credentials into
     # /aws/vendedlogs/bedrock-agentcore/gateway/APPLICATION_LOGS/{gateway_id}.
-    # This is not theoretical: a real run once created an APPLICATION_LOGS
-    # delivery source and vended credentials reached CloudWatch.
+    # That was demonstrated, not reasoned about.
+    #
+    # The credentials now travel as allowlisted PROPAGATED HEADERS and the body
+    # is forwarded deep-equal, so that capture path is closed. Measured, not
+    # assumed: with APPLICATION_LOGS temporarily enabled out of band and the real
+    # vended credentials in flight, the records contained ZERO header names and
+    # ZERO header values across five record kinds (successful tools/call, search,
+    # tools/list, incorrect parameters, unknown tool) plus BOTH
+    # authorization-failure records, which are the only place the observability
+    # docs mention headers at all.
+    #
+    # THE PROHIBITION STANDS, FOR A DIFFERENT REASON. The same records showed what
+    # APPLICATION_LOGS does carry: a `responseBody` field holding the tool's full
+    # answer. A successful read_document therefore writes the ENTIRE DOCUMENT —
+    # body, conversation, tenant — into CloudWatch. Where documents can hold
+    # attacker-supplied text, that text is copied there too, and so is whatever a
+    # successful injection exfiltrates, since that returns through the gateway as
+    # a tool result.
+    #
+    # That is a boundary problem rather than untidiness. There is ONE log group
+    # per gateway, every tenant's requests pass through that gateway, and the
+    # group has no per-tenant partition: logs:FilterLogEvents on it is a single
+    # unscoped permission over all of it. The log group is a copy of
+    # tenant-scoped data with the partition removed — the shared-reach failure
+    # this architecture exists to prevent, by a route that never touches
+    # dynamodb:LeadingKeys. Retention does not help: it bounds how long a
+    # 60-second credential record lives, and a document does not expire.
     #
     # This module therefore delivers ONLY `TRACES` (below); vended spans do NOT
     # include arguments. Two mechanical layers back the prohibition up, so it
@@ -109,11 +134,11 @@ def enable_gateway_tracing(
     # APPLICATION_LOGS while permitting TRACES. Two residual paths an operator
     # can still take are neither prevented nor detected here: a console change,
     # or a same-name PutDeliverySource that OVERWRITES this source's logType.
-    # Credential-in-payload is inherent to the AWS reference "Design 2" for a
-    # Lambda target; the exposure window is bounded by the session policy's
-    # 60-second DateLessThan on aws:CurrentTime
-    # (interceptor/scoped_credentials.py _SESSION_POLICY_TTL_SECONDS), NOT by
-    # the 900s STS DurationSeconds — that is only the session floor.
+    #
+    # If these logs are ever needed for debugging, the defensible shape is a
+    # delivery carrying the message and policy fields while dropping
+    # `requestBody` and `responseBody`. Whether the service permits that
+    # field-level selection is NOT known.
     # -----------------------------------------------------------------------
     source_name = "scoped-credentials-gateway-traces-source"
     dest_name = "scoped-credentials-gateway-traces-dest"

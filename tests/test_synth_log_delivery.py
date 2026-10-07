@@ -2,17 +2,46 @@
 
 Why this file exists
 --------------------
-The REQUEST interceptor vends short-lived tenant STS credentials to the tools
-inside ``params.arguments["context"]`` (``interceptor/handler.py``), because a
-Lambda target has no header channel. The gateway's vended ``APPLICATION_LOGS``
-carry a ``requestBody`` field that includes ``params.arguments`` VERBATIM, so
-enabling that delivery writes live ``secret_access_key`` + ``session_token``
-values into CloudWatch.
+It was written when the REQUEST interceptor vended short-lived tenant STS
+credentials to the tools inside ``params.arguments["context"]``. The gateway's
+vended ``APPLICATION_LOGS`` carry a ``requestBody`` field that includes
+``params.arguments`` VERBATIM, so enabling that delivery wrote live
+``secret_access_key`` + ``session_token`` values into CloudWatch. That was not
+theoretical: a run with the delivery temporarily enabled showed the vended
+request body carrying the credential field names.
 
-This is not theoretical: a real run once had ``APPLICATION_LOGS`` delivery
-temporarily enabled, and the vended request body DID carry
-``tenant_credentials`` and all three credential field names (the values
-themselves were never printed), after which the delivery was removed.
+THAT EXPOSURE IS CLOSED. The credentials now travel as allowlisted propagated
+request headers and the request body is forwarded deep-equal, so there is nothing
+credential-shaped in ``params.arguments`` for the log to copy. Re-measured with
+the delivery temporarily enabled and the real vended credentials in flight,
+across five record kinds (a successful ``tools/call``, a search, ``tools/list``,
+incorrect parameters, an unknown tool) plus BOTH authorization-failure records,
+which are the only place the observability documentation mentions headers at all:
+zero header names and zero header values, everywhere. The authorization-failure
+record carries one line (``Missing Bearer token`` / ``Invalid Bearer token``) and
+nothing else.
+
+THE PROHIBITION STANDS, FOR A DIFFERENT REASON. The same records showed what
+``APPLICATION_LOGS`` does carry: a ``responseBody`` field holding the tool's full
+answer. A successful ``read_document`` therefore writes the ENTIRE DOCUMENT —
+body, conversation, tenant — into CloudWatch. Where documents can carry
+attacker-supplied text, that text is copied there too, and so is whatever a
+successful injection manages to exfiltrate, since that also returns through the
+gateway as a tool result.
+
+That is a boundary problem rather than untidiness. There is ONE log group per
+gateway, every tenant's requests pass through that gateway, and the group has no
+per-tenant partition: ``logs:FilterLogEvents`` on it is a single unscoped
+permission over all of it. The log group is a copy of tenant-scoped data with the
+partition removed — the shared-reach failure this architecture exists to prevent,
+reached by a route that never touches ``dynamodb:LeadingKeys``. Retention does not
+help either: it bounds how long a 60-second credential record survives, and a
+document does not expire.
+
+If these logs are ever needed for debugging, the shape that would be defensible
+is a delivery carrying the message and policy fields while dropping
+``requestBody`` and ``responseBody``. Whether the service permits that
+field-level selection is NOT known.
 
 Until this file existed, the only thing standing between that log group and a
 live cross-tenant credential leak was a ~25-line comment in

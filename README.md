@@ -62,12 +62,14 @@ silent containment. None of that is in this repo, on purpose.
 5. The response interceptor scrubs credential shapes out of anything heading back to the
    model, and **fails closed** — a scrub error withholds the body rather than passing it
    through.
-6. Gateway log delivery is constrained to `TRACES` only. Vended credentials no longer
-   transit the request body, and the vended `APPLICATION_LOGS` record was measured with
-   a non-secret sentinel in their place: it captured the request and contained none of
-   the header names or values. The constraint is kept anyway — one record type is a thin
-   basis for removing a guard against credential leakage — and is asserted at synth
-   time, so the build fails if anyone declares an `APPLICATION_LOGS` delivery source.
+6. Gateway log delivery is constrained to `TRACES` only, asserted at synth time, so the
+   build fails if anyone declares an `APPLICATION_LOGS` delivery source. Vended
+   credentials no longer transit the request body, and the vended `APPLICATION_LOGS`
+   record was re-measured with the real credentials in flight across five record kinds
+   plus both authorization-failure records: no header name and no header value appears
+   in any of them. The constraint is kept for a different reason — those records carry a
+   `responseBody` field holding the tool's full answer, so a successful read would write
+   the entire document into a log group that has one partition for the whole gateway.
 
 ## Deploy
 
